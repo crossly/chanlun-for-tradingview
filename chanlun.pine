@@ -3,8 +3,8 @@
 // Strict recursive Chanlun indicator for TradingView.
 
 indicator(
-     "严格递归缠论",
-     shorttitle = "缠论递归",
+     "严格递归缠论 course-v2",
+     shorttitle = "缠论 course-v2",
      overlay = true,
      max_bars_back = 5000,
     max_lines_count = 500,
@@ -16,14 +16,19 @@ indicator(
 
 // Theoretical settings are intentionally fixed. Only the accepted stroke
 // definition and presentation/integration settings are configurable.
-string GROUP_THEORY = "理论口径"
 string GROUP_VIEW = "显示预设"
 string GROUP_DISPLAY = "显示开关"
 string GROUP_REFERENCE = "参考周期"
 string GROUP_ALERT = "提醒"
 int MACD_WARMUP_BARS = 200
+string THEORY_VERSION = "course-v2"
+int MOVEMENT_FORMING = 0
+int MOVEMENT_QUALIFIED = 1
+int MOVEMENT_COMPLETION_CANDIDATE = 2
+int MOVEMENT_COMPLETED = 3
+int MOVEMENT_COMPLETED_BY_REVERSE = 1
+int MOVEMENT_COMPLETED_BY_PROMOTION = 2
 
-string strokeMode = input.string("修订笔", "笔口径", options = ["修订笔", "严格笔"], group = GROUP_THEORY)
 string viewPreset = input.string("标准", "显示预设", options = ["交易", "简洁", "标准", "研究"], group = GROUP_VIEW)
 string colorTheme = input.string("TradingView", "颜色主题", options = ["TradingView", "中国市场", "色觉友好"], group = GROUP_VIEW)
 int detailBars = input.int(2000, "详细绘图窗口", minval = 300, maxval = 5000, step = 100, group = GROUP_VIEW)
@@ -33,7 +38,7 @@ bool showScenarios = input.bool(true, "情景推演", group = GROUP_DISPLAY, inl
 bool showFractals = input.bool(true, "基础分型", group = GROUP_DISPLAY, inline = "unit")
 bool showStrokes = input.bool(true, "笔", group = GROUP_DISPLAY, inline = "unit")
 bool showSegments = input.bool(true, "线段", group = GROUP_DISPLAY, inline = "segment")
-bool showHigherSegments = input.bool(true, "高阶线段", group = GROUP_DISPLAY, inline = "segment")
+bool showHigherSegments = input.bool(true, "完成走势", group = GROUP_DISPLAY, inline = "segment")
 bool showCenters = input.bool(true, "中枢", group = GROUP_DISPLAY, inline = "signal")
 bool showDivergences = input.bool(true, "背驰", group = GROUP_DISPLAY, inline = "signal")
 bool showBuySellPoints = input.bool(true, "买卖点", group = GROUP_DISPLAY, inline = "point")
@@ -65,6 +70,8 @@ type KBar
     int endTime
     float high
     float low
+    float rawRangeHigh
+    float rawRangeLow
     int highIndex
     int lowIndex
     int highTime
@@ -94,6 +101,8 @@ type Unit
     int lastChild
     float macdArea
     float difExtreme
+    float rangeHigh
+    float rangeLow
 
 type Feature
     int firstChild
@@ -130,12 +139,18 @@ type Center
     int leaveChild
     int retestChild
     bool failedDeparture
+    int failedLeaveDirection
+    int failedLeaveChild
+    int failedRetestChild
     bool expansionCandidate
     bool expansionConfirmed
     int parentCenter
     int promotionSourceFirst
     int promotionSourceSecond
     int promotionSourceThird
+    int promotionConfirmationIndex
+    int promotionConfirmationTime
+    float promotionConfirmationPrice
 
 type TrendState
     int layer
@@ -144,17 +159,22 @@ type TrendState
     int centerCount
     int firstCenter
     int lastCenter
+    int status
     bool confirmed
     bool completionCandidate
+    int completionProof
 
 type Divergence
     int layer
     int kind
     int direction
     int centerIndex
+    int comparisonCenter
     int trendCenterCount
+    int firstEnteringUnit
     int enteringUnit
     int leavingUnit
+    int thirdPointUnit
     int structureIndex
     int structureTime
     int confirmationTime
@@ -178,9 +198,11 @@ type BuySellPoint
     int layer
     int pointClass
     int direction
+    int sourceLayer
     int sourceDivergence
     int sourceCenter
     int linkedFirstPoint
+    int relativePosition
     int structureUnit
     int proofUnit
     int structureIndex
@@ -265,62 +287,71 @@ type Scenario
     string invalidationText
     string eventId
 
+type StructureSnapshot
+    string marketTimeframe
+    string slotId
+    string structureKind
+    int layer
+    string structureId
+    string state
+    int structureTime
+    int knownTime
+    string sourceId
+    string reason
+
+type LifecycleEvent
+    string structureId
+    string state
+    int structureTime
+    int knownTime
+    string sourceId
+    string reason
+    string eventId
+
 type ReferenceState
     bool seedReady
     int seedDirection
     int lastSourceTime
     int nextIndex
     int lastKnownTime
+    bool structuresDirty
 
 type ReferenceEngine
     ReferenceState state
     array<KBar> bars
     array<Fractal> endpoints
     array<Unit> strokes
-    array<Unit> segmentsL1
-    array<Unit> segmentsL2
+    array<Unit> segmentsS
+    array<Unit> movementsT0
+    array<Unit> movementsT1
+    array<Unit> movementsT2
     array<float> pendingHighs
     array<float> pendingLows
     array<int> pendingIndices
     array<int> pendingTimes
     array<float> histValues
     array<float> difValues
-    array<Center> centersL0
-    array<Center> centersL1
-    array<Center> centersL2
-    array<Divergence> divergencesL0
-    array<Divergence> divergencesL1
-    array<Divergence> divergencesL2
-    array<BuySellPoint> pointsL0
-    array<BuySellPoint> pointsL1
-    array<BuySellPoint> pointsL2
-    TrendState trendL0
-    TrendState trendL1
-    TrendState trendL2
+    array<Center> centersT0
+    array<Center> centersT1
+    array<Center> centersT2
+    array<Divergence> divergencesT0
+    array<Divergence> divergencesT1
+    array<Divergence> divergencesT2
+    array<BuySellPoint> pointsT0
+    array<BuySellPoint> pointsT1
+    array<BuySellPoint> pointsT2
+    TrendState trendT0
+    TrendState trendT1
+    TrendState trendT2
 
 f_copy_kbar(KBar source) =>
-    KBar.new(source.startIndex, source.endIndex, source.startTime, source.endTime, source.high, source.low, source.highIndex, source.lowIndex, source.highTime, source.lowTime, source.direction)
+    KBar.new(source.startIndex, source.endIndex, source.startTime, source.endTime, source.high, source.low, source.rawRangeHigh, source.rawRangeLow, source.highIndex, source.lowIndex, source.highTime, source.lowTime, source.direction)
 
 f_copy_fractal(Fractal source) =>
     Fractal.new(source.kind, source.kPosition, source.structureIndex, source.structureTime, source.confirmationTime, source.price)
 
 f_copy_unit(Unit source) =>
-    Unit.new(source.layer, source.direction, source.startIndex, source.endIndex, source.startTime, source.endTime, source.confirmationTime, source.startPrice, source.endPrice, source.confirmed, source.firstChild, source.lastChild, source.macdArea, source.difExtreme)
-
-f_copy_center(Center source) =>
-    Center.new(source.layer, source.startChild, source.lastOverlapChild, source.endChild, source.startIndex, source.endIndex, source.startTime, source.endTime, source.confirmationTime, source.departureConfirmationTime, source.zd, source.zg, source.dd, source.gg, source.confirmed, source.stateConfirmed, source.leaveState, source.leaveDirection, source.leaveChild, source.retestChild, source.failedDeparture, source.expansionCandidate, source.expansionConfirmed, source.parentCenter, source.promotionSourceFirst, source.promotionSourceSecond, source.promotionSourceThird)
-
-f_copy_divergence(Divergence source) =>
-    Divergence.new(source.layer, source.kind, source.direction, source.centerIndex, source.trendCenterCount, source.enteringUnit, source.leavingUnit, source.structureIndex, source.structureTime, source.confirmationTime, source.firstKnownTime, source.structurePrice, source.confirmationPrice, source.confirmed, source.areaRatio, source.enteringArea, source.leavingArea, source.difWeaker, source.valid, source.invalidationCandidate, source.invalidationPrice, source.evidenceStartTime, source.evidenceEndTime, source.parentStartTime, source.parentEndTime)
-
-f_copy_point(BuySellPoint source) =>
-    BuySellPoint.new(source.layer, source.pointClass, source.direction, source.sourceDivergence, source.sourceCenter, source.linkedFirstPoint, source.structureUnit, source.proofUnit, source.structureIndex, source.structureTime, source.confirmationTime, source.firstKnownTime, source.structurePrice, source.confirmationPrice, source.confirmationDelayBars, source.confirmed, source.valid, source.invalidationCandidate, source.invalidationPrice, source.evidenceStartIndex, source.evidenceStartTime, source.evidenceEndIndex, source.evidenceEndTime)
-
-f_copy_trend(TrendState source) =>
-    TrendState result = na
-    if not na(source)
-        result := TrendState.new(source.layer, source.kind, source.direction, source.centerCount, source.firstCenter, source.lastCenter, source.confirmed, source.completionCandidate)
-    result
+    Unit.new(source.layer, source.direction, source.startIndex, source.endIndex, source.startTime, source.endTime, source.confirmationTime, source.startPrice, source.endPrice, source.confirmed, source.firstChild, source.lastChild, source.macdArea, source.difExtreme, source.rangeHigh, source.rangeLow)
 
 f_copy_kbars(array<KBar> source) =>
     array<KBar> result = array.new<KBar>()
@@ -346,36 +377,12 @@ f_copy_units(array<Unit> source) =>
             array.push(result, f_copy_unit(array.get(source, i)))
     result
 
-f_copy_centers(array<Center> source) =>
-    array<Center> result = array.new<Center>()
-    int count = array.size(source)
-    if count > 0
-        for i = 0 to count - 1
-            array.push(result, f_copy_center(array.get(source, i)))
-    result
-
-f_copy_divergences(array<Divergence> source) =>
-    array<Divergence> result = array.new<Divergence>()
-    int count = array.size(source)
-    if count > 0
-        for i = 0 to count - 1
-            array.push(result, f_copy_divergence(array.get(source, i)))
-    result
-
-f_copy_points(array<BuySellPoint> source) =>
-    array<BuySellPoint> result = array.new<BuySellPoint>()
-    int count = array.size(source)
-    if count > 0
-        for i = 0 to count - 1
-            array.push(result, f_copy_point(array.get(source, i)))
-    result
-
 f_new_reference_engine() =>
-    ReferenceEngine.new(ReferenceState.new(false, 0, na, 0, na), array.new<KBar>(), array.new<Fractal>(), array.new<Unit>(), array.new<Unit>(), array.new<Unit>(), array.new<float>(), array.new<float>(), array.new<int>(), array.new<int>(), array.new<float>(), array.new<float>(), array.new<Center>(), array.new<Center>(), array.new<Center>(), array.new<Divergence>(), array.new<Divergence>(), array.new<Divergence>(), array.new<BuySellPoint>(), array.new<BuySellPoint>(), array.new<BuySellPoint>(), na, na, na)
+    ReferenceEngine.new(ReferenceState.new(false, 0, na, 0, na, false), array.new<KBar>(), array.new<Fractal>(), array.new<Unit>(), array.new<Unit>(), array.new<Unit>(), array.new<Unit>(), array.new<Unit>(), array.new<float>(), array.new<float>(), array.new<int>(), array.new<int>(), array.new<float>(), array.new<float>(), array.new<Center>(), array.new<Center>(), array.new<Center>(), array.new<Divergence>(), array.new<Divergence>(), array.new<Divergence>(), array.new<BuySellPoint>(), array.new<BuySellPoint>(), array.new<BuySellPoint>(), na, na, na)
 
 f_copy_reference_engine(ReferenceEngine source) =>
-    ReferenceState copiedState = ReferenceState.new(source.state.seedReady, source.state.seedDirection, source.state.lastSourceTime, source.state.nextIndex, source.state.lastKnownTime)
-    ReferenceEngine.new(copiedState, f_copy_kbars(source.bars), f_copy_fractals(source.endpoints), f_copy_units(source.strokes), f_copy_units(source.segmentsL1), f_copy_units(source.segmentsL2), array.copy(source.pendingHighs), array.copy(source.pendingLows), array.copy(source.pendingIndices), array.copy(source.pendingTimes), array.copy(source.histValues), array.copy(source.difValues), f_copy_centers(source.centersL0), f_copy_centers(source.centersL1), f_copy_centers(source.centersL2), f_copy_divergences(source.divergencesL0), f_copy_divergences(source.divergencesL1), f_copy_divergences(source.divergencesL2), f_copy_points(source.pointsL0), f_copy_points(source.pointsL1), f_copy_points(source.pointsL2), f_copy_trend(source.trendL0), f_copy_trend(source.trendL1), f_copy_trend(source.trendL2))
+    ReferenceState copiedState = ReferenceState.new(source.state.seedReady, source.state.seedDirection, source.state.lastSourceTime, source.state.nextIndex, source.state.lastKnownTime, source.state.structuresDirty)
+    ReferenceEngine.new(copiedState, f_copy_kbars(source.bars), f_copy_fractals(source.endpoints), f_copy_units(source.strokes), array.new<Unit>(), array.new<Unit>(), array.new<Unit>(), array.new<Unit>(), array.copy(source.pendingHighs), array.copy(source.pendingLows), array.copy(source.pendingIndices), array.copy(source.pendingTimes), array.copy(source.histValues), array.copy(source.difValues), array.new<Center>(), array.new<Center>(), array.new<Center>(), array.new<Divergence>(), array.new<Divergence>(), array.new<Divergence>(), array.new<BuySellPoint>(), array.new<BuySellPoint>(), array.new<BuySellPoint>(), na, na, na)
 
 f_next_reference_seconds(int seconds) =>
     seconds < 60 ? 60 : seconds < 300 ? 300 : seconds < 900 ? 900 : seconds < 3600 ? 3600 : seconds < 14400 ? 14400 : seconds < 86400 ? 86400 : seconds < 604800 ? 604800 : seconds < 2592000 ? 2592000 : seconds < 7776000 ? 7776000 : seconds < 31536000 ? 31536000 : 0
@@ -421,7 +428,7 @@ f_ingest_kbar(array<KBar> bars, float rawHigh, float rawLow, int rawIndex, int r
     bool appended = false
     int count = array.size(bars)
     if count == 0
-        array.push(bars, KBar.new(rawIndex, rawIndex, rawTime, rawTime, rawHigh, rawLow, rawIndex, rawIndex, rawTime, rawTime, forcedDirection))
+        array.push(bars, KBar.new(rawIndex, rawIndex, rawTime, rawTime, rawHigh, rawLow, rawHigh, rawLow, rawIndex, rawIndex, rawTime, rawTime, forcedDirection))
         appended := true
     else
         KBar lastBar = array.get(bars, count - 1)
@@ -434,6 +441,8 @@ f_ingest_kbar(array<KBar> bars, float rawHigh, float rawLow, int rawIndex, int r
             direction := lastBar.direction
         if f_contains(lastBar.high, lastBar.low, rawHigh, rawLow)
             direction := direction == 0 ? forcedDirection : direction
+            lastBar.rawRangeHigh := math.max(lastBar.rawRangeHigh, rawHigh)
+            lastBar.rawRangeLow := math.min(lastBar.rawRangeLow, rawLow)
             if direction >= 0
                 if rawHigh >= lastBar.high
                     lastBar.high := rawHigh
@@ -458,7 +467,7 @@ f_ingest_kbar(array<KBar> bars, float rawHigh, float rawLow, int rawIndex, int r
             array.set(bars, count - 1, lastBar)
         else
             int nextDirection = f_relation(lastBar.high, lastBar.low, rawHigh, rawLow)
-            array.push(bars, KBar.new(rawIndex, rawIndex, rawTime, rawTime, rawHigh, rawLow, rawIndex, rawIndex, rawTime, rawTime, nextDirection))
+            array.push(bars, KBar.new(rawIndex, rawIndex, rawTime, rawTime, rawHigh, rawLow, rawHigh, rawLow, rawIndex, rawIndex, rawTime, rawTime, nextDirection))
             appended := true
     appended
 
@@ -486,11 +495,11 @@ f_is_real_extreme(array<KBar> bars, Fractal startPoint, Fractal endPoint) =>
         for i = fromPosition to toPosition
             KBar current = array.get(bars, i)
             if startPoint.kind == 1
-                if current.high > startPoint.price or current.low < endPoint.price
+                if current.rawRangeHigh > startPoint.price or current.rawRangeLow < endPoint.price
                     valid := false
                     break
             else
-                if current.low < startPoint.price or current.high > endPoint.price
+                if current.rawRangeLow < startPoint.price or current.rawRangeHigh > endPoint.price
                     valid := false
                     break
     valid
@@ -523,10 +532,12 @@ f_apply_unit_strength(Unit unit, array<float> histValues, array<float> difValues
     unit.difExtreme := f_unit_dif_extreme(difValues, unit.startIndex, unit.endIndex, unit.direction)
     unit
 
-f_update_strokes(array<KBar> bars, array<Fractal> endpoints, array<Unit> strokes, Fractal newFractal, int minimumDistance, array<float> histValues, array<float> difValues, bool allowConfirmation) =>
+f_update_strokes(array<KBar> bars, array<Fractal> endpoints, array<Unit> strokes, Fractal newFractal, array<float> histValues, array<float> difValues, bool allowConfirmation) =>
+    bool changed = false
     int endpointCount = array.size(endpoints)
     if endpointCount == 0
         array.push(endpoints, newFractal)
+        changed := true
     else
         Fractal lastEndpoint = array.get(endpoints, endpointCount - 1)
         if newFractal.kind == lastEndpoint.kind
@@ -534,6 +545,7 @@ f_update_strokes(array<KBar> bars, array<Fractal> endpoints, array<Unit> strokes
             bool equalAndLater = newFractal.price == lastEndpoint.price and newFractal.structureTime >= lastEndpoint.structureTime
             if moreExtreme or equalAndLater
                 array.set(endpoints, endpointCount - 1, newFractal)
+                changed := true
                 int strokeCount = array.size(strokes)
                 if strokeCount > 0
                     Unit lastStroke = array.get(strokes, strokeCount - 1)
@@ -541,23 +553,28 @@ f_update_strokes(array<KBar> bars, array<Fractal> endpoints, array<Unit> strokes
                         lastStroke.endIndex := newFractal.structureIndex
                         lastStroke.endTime := newFractal.structureTime
                         lastStroke.endPrice := newFractal.price
+                        lastStroke.rangeHigh := math.max(lastStroke.startPrice, lastStroke.endPrice)
+                        lastStroke.rangeLow := math.min(lastStroke.startPrice, lastStroke.endPrice)
                         lastStroke := f_apply_unit_strength(lastStroke, histValues, difValues)
                         array.set(strokes, strokeCount - 1, lastStroke)
         else
-            bool enoughDistance = math.abs(newFractal.kPosition - lastEndpoint.kPosition) >= minimumDistance
-            bool realExtreme = enoughDistance and f_is_real_extreme(bars, lastEndpoint, newFractal)
-            if realExtreme
+            bool enoughSyntheticBars = math.abs(newFractal.kPosition - lastEndpoint.kPosition) >= 3
+            bool enoughRawBars = math.abs(newFractal.structureIndex - lastEndpoint.structureIndex) >= 4
+            bool realExtreme = enoughSyntheticBars and enoughRawBars and f_is_real_extreme(bars, lastEndpoint, newFractal)
+            if realExtreme and allowConfirmation
                 int strokeCount = array.size(strokes)
                 if strokeCount > 0
                     Unit previousStroke = array.get(strokes, strokeCount - 1)
-                    previousStroke.confirmed := allowConfirmation
-                    previousStroke.confirmationTime := allowConfirmation ? newFractal.confirmationTime : na
+                    previousStroke.confirmed := true
+                    previousStroke.confirmationTime := newFractal.confirmationTime
                     array.set(strokes, strokeCount - 1, previousStroke)
                 int direction = lastEndpoint.kind == -1 ? 1 : -1
-                Unit nextStroke = Unit.new(0, direction, lastEndpoint.structureIndex, newFractal.structureIndex, lastEndpoint.structureTime, newFractal.structureTime, na, lastEndpoint.price, newFractal.price, false, lastEndpoint.kPosition, newFractal.kPosition, na, na)
+                Unit nextStroke = Unit.new(0, direction, lastEndpoint.structureIndex, newFractal.structureIndex, lastEndpoint.structureTime, newFractal.structureTime, na, lastEndpoint.price, newFractal.price, false, lastEndpoint.kPosition, newFractal.kPosition, na, na, math.max(lastEndpoint.price, newFractal.price), math.min(lastEndpoint.price, newFractal.price))
                 nextStroke := f_apply_unit_strength(nextStroke, histValues, difValues)
                 array.push(strokes, nextStroke)
                 array.push(endpoints, newFractal)
+                changed := true
+    changed
 
 f_extend_terminal_candidate(array<Unit> strokes, int sourceIndex, int sourceTime, float sourceHigh, float sourceLow, array<float> histValues, array<float> difValues) =>
     int strokeCount = array.size(strokes)
@@ -569,14 +586,32 @@ f_extend_terminal_candidate(array<Unit> strokes, int sourceIndex, int sourceTime
                 terminal.endIndex := sourceIndex
                 terminal.endTime := sourceTime
                 terminal.endPrice := terminal.direction == 1 ? sourceHigh : sourceLow
+                terminal.rangeHigh := math.max(terminal.startPrice, terminal.endPrice)
+                terminal.rangeLow := math.min(terminal.startPrice, terminal.endPrice)
                 terminal := f_apply_unit_strength(terminal, histValues, difValues)
                 array.set(strokes, strokeCount - 1, terminal)
 
 f_unit_high(Unit unit) =>
-    math.max(unit.startPrice, unit.endPrice)
+    na(unit.rangeHigh) ? math.max(unit.startPrice, unit.endPrice) : unit.rangeHigh
 
 f_unit_low(Unit unit) =>
-    math.min(unit.startPrice, unit.endPrice)
+    na(unit.rangeLow) ? math.min(unit.startPrice, unit.endPrice) : unit.rangeLow
+
+f_children_range_high(array<Unit> units, int firstChild, int lastChild) =>
+    float result = na
+    if firstChild >= 0 and lastChild >= firstChild and lastChild < array.size(units)
+        for childIndex = firstChild to lastChild
+            float childHigh = f_unit_high(array.get(units, childIndex))
+            result := na(result) ? childHigh : math.max(result, childHigh)
+    result
+
+f_children_range_low(array<Unit> units, int firstChild, int lastChild) =>
+    float result = na
+    if firstChild >= 0 and lastChild >= firstChild and lastChild < array.size(units)
+        for childIndex = firstChild to lastChild
+            float childLow = f_unit_low(array.get(units, childIndex))
+            result := na(result) ? childLow : math.min(result, childLow)
+    result
 
 f_feature_from_unit(Unit unit, int childIndex, int direction) =>
     bool highAtStart = unit.startPrice >= unit.endPrice
@@ -692,7 +727,9 @@ f_build_recursive_layer(array<Unit> lowerUnits, array<Unit> outputUnits, int lay
             Unit boundary = array.get(lowerUnits, endpointChild)
             Unit proof = array.get(lowerUnits, proofChild)
             int confirmationTime = na(proof.confirmationTime) ? proof.endTime : proof.confirmationTime
-            Unit confirmedUnit = Unit.new(layer, segmentDirection, startUnit.startIndex, boundary.startIndex, startUnit.startTime, boundary.startTime, confirmationTime, startUnit.startPrice, boundary.startPrice, true, startChild, endpointChild - 1, na, na)
+            float segmentHigh = f_children_range_high(lowerUnits, startChild, endpointChild - 1)
+            float segmentLow = f_children_range_low(lowerUnits, startChild, endpointChild - 1)
+            Unit confirmedUnit = Unit.new(layer, segmentDirection, startUnit.startIndex, boundary.startIndex, startUnit.startTime, boundary.startTime, confirmationTime, startUnit.startPrice, boundary.startPrice, true, startChild, endpointChild - 1, na, na, segmentHigh, segmentLow)
             confirmedUnit := f_apply_unit_strength(confirmedUnit, histValues, difValues)
             array.push(outputUnits, confirmedUnit)
             startChild := endpointChild
@@ -720,7 +757,9 @@ f_build_recursive_layer(array<Unit> lowerUnits, array<Unit> outputUnits, int lay
                 bool lowAtStart = child.startPrice <= child.endPrice
                 extremeIndex := lowAtStart ? child.startIndex : child.endIndex
                 extremeTime := lowAtStart ? child.startTime : child.endTime
-        Unit candidateUnit = Unit.new(layer, candidateDirection, candidateStart.startIndex, extremeIndex, candidateStart.startTime, extremeTime, na, candidateStart.startPrice, extremePrice, false, startChild, lowerCount - 1, na, na)
+        float candidateHigh = f_children_range_high(lowerUnits, startChild, lowerCount - 1)
+        float candidateLow = f_children_range_low(lowerUnits, startChild, lowerCount - 1)
+        Unit candidateUnit = Unit.new(layer, candidateDirection, candidateStart.startIndex, extremeIndex, candidateStart.startTime, extremeTime, na, candidateStart.startPrice, extremePrice, false, startChild, lowerCount - 1, na, na, candidateHigh, candidateLow)
         candidateUnit := f_apply_unit_strength(candidateUnit, histValues, difValues)
         array.push(outputUnits, candidateUnit)
 
@@ -749,7 +788,7 @@ f_has_reliable_confirmed_center(array<Unit> units, int warmupBars) =>
     found
 
 f_center_relation(Center previous, Center current) =>
-    current.zd > previous.zg ? 1 : current.zg < previous.zd ? -1 : 0
+    current.dd > previous.gg ? 1 : current.gg < previous.dd ? -1 : 0
 
 f_create_center(array<Unit> units, int layer, int startChild) =>
     Center result = na
@@ -766,7 +805,7 @@ f_create_center(array<Unit> units, int layer, int startChild) =>
             float gg = math.max(f_unit_high(first), math.max(f_unit_high(second), f_unit_high(third)))
             bool coreConfirmed = first.confirmed and second.confirmed and third.confirmed
             int coreConfirmationTime = coreConfirmed ? (na(third.confirmationTime) ? third.endTime : third.confirmationTime) : na
-            Center newCenter = Center.new(layer, startChild, startChild + 2, startChild + 2, first.startIndex, third.endIndex, first.startTime, third.endTime, coreConfirmationTime, na, zd, zg, dd, gg, coreConfirmed, coreConfirmed, 0, 0, na, na, false, false, false, na, na, na, na)
+            Center newCenter = Center.new(layer, startChild, startChild + 2, startChild + 2, first.startIndex, third.endIndex, first.startTime, third.endTime, coreConfirmationTime, na, zd, zg, dd, gg, coreConfirmed, coreConfirmed, 0, 0, na, na, false, 0, na, na, false, false, na, na, na, na, na, na, na)
             if startChild + 3 < unitCount
                 for i = startChild + 3 to unitCount - 1
                     Unit current = array.get(units, i)
@@ -777,6 +816,9 @@ f_create_center(array<Unit> units, int layer, int startChild) =>
                             newCenter.dd := math.min(newCenter.dd, f_unit_low(failedLeave))
                             newCenter.gg := math.max(newCenter.gg, f_unit_high(failedLeave))
                             newCenter.failedDeparture := true
+                            newCenter.failedLeaveDirection := newCenter.leaveDirection
+                            newCenter.failedLeaveChild := newCenter.leaveChild
+                            newCenter.failedRetestChild := i
                             newCenter.stateConfirmed := newCenter.confirmed and failedLeave.confirmed and current.confirmed
                         else
                             newCenter.stateConfirmed := newCenter.stateConfirmed and current.confirmed
@@ -800,7 +842,7 @@ f_create_center(array<Unit> units, int layer, int startChild) =>
                             newCenter.endIndex := current.endIndex
                             newCenter.endTime := current.endTime
                             newCenter.stateConfirmed := false
-                        else if side == newCenter.leaveDirection and side != 0
+                        else if side == newCenter.leaveDirection and side != 0 and current.direction == -newCenter.leaveDirection
                             Unit leaving = array.get(units, newCenter.leaveChild)
                             newCenter.retestChild := i
                             newCenter.endChild := i
@@ -818,6 +860,9 @@ f_create_center(array<Unit> units, int layer, int startChild) =>
                             newCenter.dd := math.min(newCenter.dd, math.min(f_unit_low(failedLeave), f_unit_low(current)))
                             newCenter.gg := math.max(newCenter.gg, math.max(f_unit_high(failedLeave), f_unit_high(current)))
                             newCenter.failedDeparture := true
+                            newCenter.failedLeaveDirection := newCenter.leaveDirection
+                            newCenter.failedLeaveChild := newCenter.leaveChild
+                            newCenter.failedRetestChild := i
                             newCenter.stateConfirmed := newCenter.confirmed and failedLeave.confirmed and current.confirmed
                             newCenter.endChild := i
                             newCenter.endIndex := current.endIndex
@@ -850,12 +895,14 @@ f_build_centers(array<Unit> units, array<Center> centers, int layer) =>
         for i = 1 to centerCount - 1
             Center previous = array.get(centers, i - 1)
             Center current = array.get(centers, i)
+            bool coreOverlap = math.max(previous.zd, current.zd) < math.min(previous.zg, current.zg)
+            bool coreTouches = math.max(previous.zd, current.zd) == math.min(previous.zg, current.zg)
             bool volatilityOverlap = math.max(previous.dd, current.dd) < math.min(previous.gg, current.gg)
-            if volatilityOverlap
+            if not coreOverlap and not coreTouches and volatilityOverlap
                 current.expansionCandidate := true
                 array.set(centers, i, current)
 
-f_link_center_promotions(array<Center> lowerCenters, array<Center> higherCenters) =>
+f_link_center_promotions(array<Center> lowerCenters, array<Center> higherCenters, array<Unit> higherComponents) =>
     int lowerCount = array.size(lowerCenters)
     int higherCount = array.size(higherCenters)
     if lowerCount >= 2 and higherCount > 0
@@ -867,14 +914,32 @@ f_link_center_promotions(array<Center> lowerCenters, array<Center> higherCenters
                     Center parent = array.get(higherCenters, higherIndex)
                     bool containsSources = parent.startTime <= previous.startTime and parent.endTime >= current.endTime
                     bool hasThreeConfirmedSources = parent.confirmed and parent.lastOverlapChild >= parent.startChild + 2
-                    if hasThreeConfirmedSources and containsSources
+                    int lowerComponentCount = 0
+                    if hasThreeConfirmedSources and parent.startChild + 2 < array.size(higherComponents)
+                        for sourceIndex = parent.startChild to parent.startChild + 2
+                            Unit source = array.get(higherComponents, sourceIndex)
+                            lowerComponentCount += math.max(0, source.lastChild - source.firstChild + 1)
+                    bool hasNineLowerComponents = lowerComponentCount >= 9
+                    if hasThreeConfirmedSources and hasNineLowerComponents and containsSources
+                        Unit promotionProof = array.get(higherComponents, parent.startChild + 2)
                         current.expansionConfirmed := true
                         current.parentCenter := higherIndex
                         current.promotionSourceFirst := parent.startChild
                         current.promotionSourceSecond := parent.startChild + 1
                         current.promotionSourceThird := parent.startChild + 2
+                        current.promotionConfirmationIndex := promotionProof.endIndex
+                        current.promotionConfirmationTime := na(parent.confirmationTime) ? (na(promotionProof.confirmationTime) ? promotionProof.endTime : promotionProof.confirmationTime) : parent.confirmationTime
+                        current.promotionConfirmationPrice := promotionProof.endPrice
+                        // promotion_does_not_bootstrap_parent_components: the parent
+                        // was already built only from independently completed movements.
                         array.set(lowerCenters, lowerIndex, current)
                         break
+
+f_is_qualified_reverse_component(Unit proof, int trendLevel, int movementDirection) =>
+    int expectedLayer = trendLevel - 1
+    bool expectedLevel = proof.layer == expectedLayer
+    bool completeBaseSegment = trendLevel > 0 or proof.lastChild - proof.firstChild + 1 >= 3
+    proof.confirmed and proof.direction == -movementDirection and expectedLevel and completeBaseSegment
 
 f_previous_divergence_known(array<Divergence> previous, int layer, int kind, int direction, int structureTime) =>
     int result = time
@@ -895,48 +960,99 @@ f_build_divergences(array<Unit> units, array<Center> centers, array<Divergence> 
     if centerCount > 0
         for centerIndex = 0 to centerCount - 1
             Center currentCenter = array.get(centers, centerIndex)
-            bool hasDeparture = currentCenter.confirmed and currentCenter.leaveState > 0 and currentCenter.leaveDirection != 0 and not na(currentCenter.leaveChild)
+            bool activeDeparture = currentCenter.leaveState > 0 and currentCenter.leaveDirection != 0 and not na(currentCenter.leaveChild)
+            bool confirmedFailedDeparture = currentCenter.failedDeparture and currentCenter.stateConfirmed and currentCenter.failedLeaveDirection != 0 and not na(currentCenter.failedLeaveChild) and not na(currentCenter.failedRetestChild)
+            bool hasDeparture = currentCenter.confirmed and (activeDeparture or confirmedFailedDeparture)
             if hasDeparture
+                int departureDirection = activeDeparture ? currentCenter.leaveDirection : currentCenter.failedLeaveDirection
+                int departureChild = activeDeparture ? currentCenter.leaveChild : currentCenter.failedLeaveChild
+                int trendCenterCount = 1
+                if centerIndex >= 1
+                    for relationIndex = 1 to centerIndex
+                        Center relationPrevious = array.get(centers, relationIndex - 1)
+                        Center relationCurrent = array.get(centers, relationIndex)
+                        int relation = f_center_relation(relationPrevious, relationCurrent)
+                        if relation == departureDirection
+                            trendCenterCount += 1
+                        else
+                            trendCenterCount := 1
+                int divergenceKind = trendCenterCount >= 2 ? 2 : 1
+                int comparisonCenter = divergenceKind == 2 ? centerIndex - 1 : na
+                int firstTrendCenter = math.max(0, centerIndex - trendCenterCount + 1)
+                Center trendStartCenter = array.get(centers, firstTrendCenter)
                 int enteringIndex = na
                 if currentCenter.startChild > 0
                     for unitIndex = 0 to currentCenter.startChild - 1
                         Unit possibleEntering = array.get(units, unitIndex)
-                        if possibleEntering.direction == currentCenter.leaveDirection
+                        if possibleEntering.direction == departureDirection
                             enteringIndex := unitIndex
-                if not na(enteringIndex)
+                int firstEnteringIndex = na
+                int comparisonStartChild = divergenceKind == 2 and comparisonCenter >= 0 ? array.get(centers, comparisonCenter).startChild : trendStartCenter.startChild
+                if comparisonStartChild > 0
+                    for unitIndex = 0 to comparisonStartChild - 1
+                        Unit possibleFirstEntering = array.get(units, unitIndex)
+                        if possibleFirstEntering.direction == departureDirection
+                            firstEnteringIndex := unitIndex
+
+                bool confirmedThirdPoint = false
+                int thirdPointIndex = na
+                if activeDeparture and currentCenter.leaveState == 2 and not na(currentCenter.retestChild)
+                    Unit retest = array.get(units, currentCenter.retestChild)
+                    bool reverseRetest = retest.direction == -departureDirection
+                    bool outsideCore = departureDirection == 1 ? f_unit_low(retest) >= currentCenter.zg : f_unit_high(retest) <= currentCenter.zd
+                    confirmedThirdPoint := reverseRetest and outsideCore and retest.confirmed
+                    thirdPointIndex := confirmedThirdPoint ? currentCenter.retestChild : na
+
+                int leavingIndex = departureChild
+                if divergenceKind == 2
+                    int possibleLeavingIndex = na(thirdPointIndex) ? na : thirdPointIndex + 1
+                    if not na(possibleLeavingIndex) and possibleLeavingIndex < array.size(units)
+                        Unit possibleLeaving = array.get(units, possibleLeavingIndex)
+                        if possibleLeaving.direction == departureDirection
+                            leavingIndex := possibleLeavingIndex
+                        else
+                            leavingIndex := na
+                    else
+                        leavingIndex := na
+
+                bool traceableTrend = divergenceKind == 1 or (comparisonCenter >= 0 and not na(firstEnteringIndex) and confirmedThirdPoint and not na(leavingIndex))
+                if not na(enteringIndex) and not na(leavingIndex) and traceableTrend
                     Unit entering = array.get(units, enteringIndex)
-                    Unit leaving = array.get(units, currentCenter.leaveChild)
-                    bool newExtreme = currentCenter.leaveDirection == 1 ? f_unit_high(leaving) > f_unit_high(entering) : f_unit_low(leaving) < f_unit_low(entering)
+                    Unit leaving = array.get(units, leavingIndex)
                     bool weakerArea = entering.macdArea > 0 and leaving.macdArea < entering.macdArea
                     bool reliable = entering.startIndex >= warmupBars
-                    if newExtreme and weakerArea and reliable
-                        int trendCenterCount = 1
-                        if centerIndex >= 1
-                            for relationIndex = 1 to centerIndex
-                                Center relationPrevious = array.get(centers, relationIndex - 1)
-                                Center relationCurrent = array.get(centers, relationIndex)
-                                int relation = f_center_relation(relationPrevious, relationCurrent)
-                                trendCenterCount := relation == currentCenter.leaveDirection ? trendCenterCount + 1 : 1
-                        int divergenceKind = trendCenterCount >= 2 ? 2 : 1
-                        bool divergenceConfirmed = currentCenter.leaveState == 2 and leaving.confirmed
+                    if weakerArea and reliable
+                        float previousExtreme = na
+                        if leavingIndex > trendStartCenter.startChild
+                            for extremeIndex = trendStartCenter.startChild to leavingIndex - 1
+                                Unit extremeUnit = array.get(units, extremeIndex)
+                                float extremeValue = departureDirection == 1 ? f_unit_high(extremeUnit) : f_unit_low(extremeUnit)
+                                previousExtreme := na(previousExtreme) ? extremeValue : departureDirection == 1 ? math.max(previousExtreme, extremeValue) : math.min(previousExtreme, extremeValue)
+                        bool newTrendExtreme = na(previousExtreme) or (departureDirection == 1 ? f_unit_high(leaving) > previousExtreme : f_unit_low(leaving) < previousExtreme)
+                        bool structureEligible = divergenceKind == 2 ? newTrendExtreme : true
+                        bool divergenceConfirmed = leaving.confirmed
                         float structurePrice = leaving.endPrice
                         int structureIndex = leaving.endIndex
                         int structureTime = leaving.endTime
-                        float confirmationPrice = na
-                        if divergenceConfirmed and not na(currentCenter.retestChild)
-                            Unit proof = array.get(units, currentCenter.retestChild)
-                            confirmationPrice := proof.endPrice
+                        float confirmationPrice = divergenceConfirmed ? leaving.endPrice : na
                         float areaRatio = entering.macdArea > 0 ? leaving.macdArea / entering.macdArea : na
-                        bool difWeaker = currentCenter.leaveDirection == 1 ? leaving.difExtreme < entering.difExtreme : leaving.difExtreme > entering.difExtreme
-                        int evidenceStartTime = divergenceConfirmed ? currentCenter.departureConfirmationTime : structureTime
-                        int firstKnownTime = f_previous_divergence_known(previousDivergences, layer, divergenceKind, currentCenter.leaveDirection, structureTime)
-                        array.push(divergences, Divergence.new(layer, divergenceKind, currentCenter.leaveDirection, centerIndex, trendCenterCount, enteringIndex, currentCenter.leaveChild, structureIndex, structureTime, divergenceConfirmed ? currentCenter.departureConfirmationTime : na, firstKnownTime, structurePrice, confirmationPrice, divergenceConfirmed, areaRatio, entering.macdArea, leaving.macdArea, difWeaker, true, false, structurePrice, evidenceStartTime, na, leaving.startTime, leaving.endTime))
+                        bool difWeaker = departureDirection == 1 ? leaving.difExtreme < entering.difExtreme : leaving.difExtreme > entering.difExtreme
+                        int divergenceConfirmationTime = divergenceConfirmed ? (na(leaving.confirmationTime) ? leaving.endTime : leaving.confirmationTime) : na
+                        int evidenceStartTime = divergenceConfirmed ? divergenceConfirmationTime : structureTime
+                        int firstKnownTime = f_previous_divergence_known(previousDivergences, layer, divergenceKind, departureDirection, structureTime)
+                        if structureEligible
+                            array.push(divergences, Divergence.new(layer, divergenceKind, departureDirection, centerIndex, comparisonCenter, trendCenterCount, firstEnteringIndex, enteringIndex, leavingIndex, thirdPointIndex, structureIndex, structureTime, divergenceConfirmationTime, firstKnownTime, structurePrice, confirmationPrice, divergenceConfirmed, areaRatio, entering.macdArea, leaving.macdArea, difWeaker, true, false, structurePrice, evidenceStartTime, na, leaving.startTime, leaving.endTime))
 
     int divergenceCount = array.size(divergences)
     if divergenceCount > 0
         for divergenceIndex = 0 to divergenceCount - 1
             Divergence current = array.get(divergences, divergenceIndex)
-            if current.confirmed
+            bool endpointFrozenByReverse = false
+            int completionProofIndex = current.leavingUnit + 1
+            if completionProofIndex < array.size(units)
+                Unit completionProof = array.get(units, completionProofIndex)
+                endpointFrozenByReverse := f_is_qualified_reverse_component(completionProof, layer, current.direction)
+            if current.confirmed and not endpointFrozenByReverse
                 int scanFrom = current.leavingUnit + 1
                 if current.centerIndex < array.size(centers)
                     Center sourceCenter = array.get(centers, current.centerIndex)
@@ -954,7 +1070,44 @@ f_build_divergences(array<Unit> units, array<Center> centers, array<Divergence> 
                                 current.invalidationCandidate := true
                 array.set(divergences, divergenceIndex, current)
 
-f_get_trend_state(array<Center> centers, array<Divergence> divergences, int layer) =>
+f_build_completed_movements(array<Unit> components, array<Center> centers, array<Divergence> divergences, array<Unit> movements, int trendLevel, array<float> histValues, array<float> difValues) =>
+    array.clear(movements)
+    int nextFirstComponent = 0
+    int previousDirection = 0
+    int divergenceCount = array.size(divergences)
+    if divergenceCount > 0
+        for divergenceIndex = 0 to divergenceCount - 1
+            Divergence divergence = array.get(divergences, divergenceIndex)
+            if divergence.confirmed and divergence.valid and divergence.centerIndex >= 0 and divergence.centerIndex < array.size(centers)
+                Center sourceCenter = array.get(centers, divergence.centerIndex)
+                int enteringComponent = divergence.kind == 2 and not na(divergence.firstEnteringUnit) ? divergence.firstEnteringUnit : divergence.enteringUnit
+                int firstCenterChild = sourceCenter.startChild
+                if divergence.kind == 2 and divergence.comparisonCenter >= 0 and divergence.comparisonCenter < array.size(centers)
+                    firstCenterChild := array.get(centers, divergence.comparisonCenter).startChild
+                int naturalFirstComponent = math.max(0, math.min(enteringComponent, firstCenterChild))
+                int firstComponent = array.size(movements) == 0 ? naturalFirstComponent : nextFirstComponent
+                int lastComponent = divergence.leavingUnit
+                int proofComponent = lastComponent + 1
+                bool directionAlternates = previousDirection == 0 or divergence.direction == -previousDirection
+                bool sourceInsideMovement = firstCenterChild >= firstComponent and sourceCenter.startChild + 2 <= lastComponent
+                bool hasReverseProof = proofComponent < array.size(components)
+                if hasReverseProof
+                    Unit proof = array.get(components, proofComponent)
+                    hasReverseProof := f_is_qualified_reverse_component(proof, trendLevel, divergence.direction)
+                if directionAlternates and sourceInsideMovement and hasReverseProof and lastComponent >= firstComponent and lastComponent < array.size(components)
+                    Unit first = array.get(components, firstComponent)
+                    Unit last = array.get(components, lastComponent)
+                    Unit proof = array.get(components, proofComponent)
+                    float movementHigh = f_children_range_high(components, firstComponent, lastComponent)
+                    float movementLow = f_children_range_low(components, firstComponent, lastComponent)
+                    int completionTime = na(proof.confirmationTime) ? proof.endTime : proof.confirmationTime
+                    Unit movement = Unit.new(trendLevel, divergence.direction, first.startIndex, last.endIndex, first.startTime, last.endTime, completionTime, first.startPrice, last.endPrice, true, firstComponent, lastComponent, na, na, movementHigh, movementLow)
+                    movement := f_apply_unit_strength(movement, histValues, difValues)
+                    array.push(movements, movement)
+                    nextFirstComponent := proofComponent
+                    previousDirection := divergence.direction
+
+f_get_trend_state(array<Center> centers, array<Divergence> divergences, array<Unit> completedMovements, int layer) =>
     int centerCount = array.size(centers)
     int kind = 0
     int direction = 0
@@ -963,6 +1116,8 @@ f_get_trend_state(array<Center> centers, array<Divergence> divergences, int laye
     int lastCenter = na
     bool confirmed = false
     bool completionCandidate = false
+    int completionProof = 0
+    int status = 0
     if centerCount > 0
         kind := 1
         sequenceCount := 1
@@ -970,7 +1125,7 @@ f_get_trend_state(array<Center> centers, array<Divergence> divergences, int laye
         lastCenter := centerCount - 1
         Center last = array.get(centers, lastCenter)
         direction := last.leaveDirection
-        confirmed := last.stateConfirmed
+        status := last.confirmed ? MOVEMENT_QUALIFIED : MOVEMENT_FORMING
         if centerCount >= 2
             int sequenceDirection = 0
             for i = 1 to centerCount - 1
@@ -996,11 +1151,36 @@ f_get_trend_state(array<Center> centers, array<Divergence> divergences, int laye
         int divergenceCount = array.size(divergences)
         if divergenceCount > 0
             Divergence latest = array.get(divergences, divergenceCount - 1)
-            completionCandidate := latest.centerIndex == lastCenter
-    TrendState.new(layer, kind, direction, sequenceCount, firstCenter, lastCenter, confirmed, completionCandidate)
+            completionCandidate := latest.centerIndex == lastCenter and latest.valid
+            if completionCandidate
+                status := MOVEMENT_COMPLETION_CANDIDATE
+                int movementCount = array.size(completedMovements)
+                if movementCount > 0
+                    Unit latestCompleted = array.get(completedMovements, movementCount - 1)
+                    if latestCompleted.endTime == latest.structureTime and latestCompleted.direction == latest.direction
+                        status := MOVEMENT_COMPLETED
+                        completionProof := MOVEMENT_COMPLETED_BY_REVERSE
+                Center sourceCenter = array.get(centers, latest.centerIndex)
+                bool promotionCompletes = latest.confirmed and sourceCenter.expansionConfirmed and not na(sourceCenter.promotionConfirmationTime) and sourceCenter.promotionConfirmationTime >= latest.confirmationTime
+                if status != MOVEMENT_COMPLETED and promotionCompletes
+                    status := MOVEMENT_COMPLETED
+                    completionProof := MOVEMENT_COMPLETED_BY_PROMOTION
+        confirmed := status == MOVEMENT_COMPLETED
+    TrendState.new(layer, kind, direction, sequenceCount, firstCenter, lastCenter, status, confirmed, completionCandidate, completionProof)
 
 f_unit_confirmation_time(Unit unit) =>
     na(unit.confirmationTime) ? unit.endTime : unit.confirmationTime
+
+f_completed_movement_index(array<Unit> movements, Divergence divergence) =>
+    int result = na
+    int movementCount = array.size(movements)
+    if movementCount > 0
+        for movementIndex = 0 to movementCount - 1
+            Unit movement = array.get(movements, movementIndex)
+            if movement.direction == divergence.direction and movement.endTime == divergence.structureTime
+                result := movementIndex
+                break
+    result
 
 f_previous_point_known(array<BuySellPoint> previous, int layer, int pointClass, int direction, int structureTime) =>
     int result = time
@@ -1014,7 +1194,7 @@ f_previous_point_known(array<BuySellPoint> previous, int layer, int pointClass, 
                 break
     result
 
-f_build_points(array<Unit> units, array<Center> centers, array<Divergence> divergences, array<BuySellPoint> points, int layer) =>
+f_build_points(array<Unit> units, array<Center> centers, array<Divergence> divergences, array<Unit> completedMovements, array<BuySellPoint> lowerPoints, array<BuySellPoint> points, int layer) =>
     array<BuySellPoint> previousPoints = array.copy(points)
     array.clear(points)
     int unitCount = array.size(units)
@@ -1023,20 +1203,34 @@ f_build_points(array<Unit> units, array<Center> centers, array<Divergence> diver
     if divergenceCount > 0
         for divergenceIndex = 0 to divergenceCount - 1
             Divergence current = array.get(divergences, divergenceIndex)
-            if current.kind == 2
+            if current.kind == 2 and current.valid
                 int pointDirection = -current.direction
                 Center sourceCenter = array.get(centers, current.centerIndex)
-                int proofIndex = sourceCenter.retestChild
+                int completedMovementIndex = f_completed_movement_index(completedMovements, current)
+                bool completedByReverse = not na(completedMovementIndex)
+                bool completedByPromotion = current.confirmed and sourceCenter.expansionConfirmed and not na(sourceCenter.promotionConfirmationTime) and sourceCenter.promotionConfirmationTime >= current.confirmationTime
+                bool pointConfirmed = completedByReverse or completedByPromotion
+                int proofIndex = completedByReverse and current.leavingUnit + 1 < unitCount ? current.leavingUnit + 1 : na
                 int evidenceStartIndex = current.structureIndex
                 int evidenceStartTime = current.structureTime
                 int delayBars = na
-                if current.confirmed and not na(proofIndex)
+                int pointConfirmationTime = na
+                float pointConfirmationPrice = na
+                if pointConfirmed and not na(proofIndex)
                     Unit proof = array.get(units, proofIndex)
                     evidenceStartIndex := proof.endIndex
                     evidenceStartTime := f_unit_confirmation_time(proof)
                     delayBars := math.max(0, proof.endIndex - current.structureIndex)
+                    pointConfirmationTime := f_unit_confirmation_time(proof)
+                    pointConfirmationPrice := proof.endPrice
+                else if completedByPromotion
+                    evidenceStartIndex := sourceCenter.promotionConfirmationIndex
+                    evidenceStartTime := sourceCenter.promotionConfirmationTime
+                    delayBars := math.max(0, sourceCenter.promotionConfirmationIndex - current.structureIndex)
+                    pointConfirmationTime := sourceCenter.promotionConfirmationTime
+                    pointConfirmationPrice := sourceCenter.promotionConfirmationPrice
                 int firstKnownTime = f_previous_point_known(previousPoints, layer, 1, pointDirection, current.structureTime)
-                array.push(points, BuySellPoint.new(layer, 1, pointDirection, divergenceIndex, current.centerIndex, na, current.leavingUnit, proofIndex, current.structureIndex, current.structureTime, current.confirmed ? current.confirmationTime : na, firstKnownTime, current.structurePrice, current.confirmationPrice, delayBars, current.confirmed, true, false, current.structurePrice, evidenceStartIndex, evidenceStartTime, na, na))
+                array.push(points, BuySellPoint.new(layer, 1, pointDirection, layer, divergenceIndex, current.centerIndex, na, 0, current.leavingUnit, proofIndex, current.structureIndex, current.structureTime, pointConfirmationTime, firstKnownTime, current.structurePrice, pointConfirmationPrice, delayBars, pointConfirmed, true, false, current.structurePrice, evidenceStartIndex, evidenceStartTime, na, na))
 
     int firstPointCount = array.size(points)
     if firstPointCount > 0
@@ -1045,32 +1239,55 @@ f_build_points(array<Unit> units, array<Center> centers, array<Divergence> diver
             if firstPoint.confirmed
                 int reverseIndex = firstPoint.structureUnit + 1
                 int pullbackIndex = firstPoint.structureUnit + 2
-                int proofIndex = firstPoint.structureUnit + 3
                 if pullbackIndex < unitCount
                     Unit reverseAdvance = array.get(units, reverseIndex)
                     Unit pullback = array.get(units, pullbackIndex)
                     bool correctSequence = reverseAdvance.direction == firstPoint.direction and pullback.direction == -firstPoint.direction
-                    bool holdsExtreme = firstPoint.direction == 1 ? f_unit_low(pullback) >= firstPoint.structurePrice : f_unit_high(pullback) <= firstPoint.structurePrice
-                    if correctSequence and holdsExtreme
-                        bool pointConfirmed = false
-                        int pointConfirmationTime = na
-                        float pointConfirmationPrice = na
+                    if correctSequence
+                        bool pointConfirmed = pullback.confirmed
+                        int pointConfirmationTime = pointConfirmed ? f_unit_confirmation_time(pullback) : na
+                        float pointConfirmationPrice = pointConfirmed ? pullback.endPrice : na
                         int evidenceStartIndex = pullback.endIndex
-                        int evidenceStartTime = pullback.endTime
-                        int delayBars = na
-                        int storedProofIndex = na
-                        if proofIndex < unitCount
-                            Unit proof = array.get(units, proofIndex)
-                            storedProofIndex := proofIndex
-                            if proof.direction == firstPoint.direction and proof.confirmed
-                                pointConfirmed := true
-                                pointConfirmationTime := f_unit_confirmation_time(proof)
-                                pointConfirmationPrice := proof.endPrice
-                                evidenceStartIndex := proof.endIndex
-                                evidenceStartTime := pointConfirmationTime
-                                delayBars := math.max(0, proof.endIndex - pullback.endIndex)
+                        int evidenceStartTime = pointConfirmed ? pointConfirmationTime : pullback.endTime
+                        int delayBars = pointConfirmed ? math.max(0, pullback.endIndex - firstPoint.structureIndex) : na
+                        float relativePrice = pullback.endPrice
+                        int relativePosition = relativePrice == firstPoint.structurePrice ? 0 : firstPoint.direction == 1 ? (relativePrice > firstPoint.structurePrice ? 1 : -1) : (relativePrice < firstPoint.structurePrice ? 1 : -1)
                         int firstKnownTime = f_previous_point_known(previousPoints, layer, 2, firstPoint.direction, pullback.endTime)
-                        array.push(points, BuySellPoint.new(layer, 2, firstPoint.direction, firstPoint.sourceDivergence, firstPoint.sourceCenter, firstPointIndex, pullbackIndex, storedProofIndex, pullback.endIndex, pullback.endTime, pointConfirmationTime, firstKnownTime, pullback.endPrice, pointConfirmationPrice, delayBars, pointConfirmed, true, false, firstPoint.structurePrice, evidenceStartIndex, evidenceStartTime, na, na))
+                        array.push(points, BuySellPoint.new(layer, 2, firstPoint.direction, layer, firstPoint.sourceDivergence, firstPoint.sourceCenter, firstPointIndex, relativePosition, pullbackIndex, pullbackIndex, pullback.endIndex, pullback.endTime, pointConfirmationTime, firstKnownTime, pullback.endPrice, pointConfirmationPrice, delayBars, pointConfirmed, true, false, pullback.endPrice, evidenceStartIndex, evidenceStartTime, na, na))
+
+    int lowerPointCount = array.size(lowerPoints)
+    if layer > 0 and lowerPointCount > 0
+        for lowerPointIndex = 0 to lowerPointCount - 1
+            BuySellPoint lowerFirst = array.get(lowerPoints, lowerPointIndex)
+            if lowerFirst.pointClass == 1 and lowerFirst.confirmed and lowerFirst.valid
+                int advanceIndex = na
+                if unitCount > 0
+                    for unitIndex = 0 to unitCount - 1
+                        Unit possibleAdvance = array.get(units, unitIndex)
+                        bool startsAfterFirstPoint = possibleAdvance.startTime >= lowerFirst.structureTime
+                        bool knownAfterFirstPoint = f_unit_confirmation_time(possibleAdvance) >= lowerFirst.confirmationTime
+                        if na(advanceIndex) and possibleAdvance.direction == lowerFirst.direction and startsAfterFirstPoint and knownAfterFirstPoint
+                            advanceIndex := unitIndex
+                int pullbackIndex = na(advanceIndex) ? na : advanceIndex + 1
+                if not na(pullbackIndex) and pullbackIndex < unitCount
+                    Unit pullback = array.get(units, pullbackIndex)
+                    bool correctSequence = pullback.direction == -lowerFirst.direction
+                    bool duplicate = false
+                    int currentPointCount = array.size(points)
+                    if currentPointCount > 0
+                        for pointIndex = 0 to currentPointCount - 1
+                            BuySellPoint existing = array.get(points, pointIndex)
+                            if existing.pointClass == 2 and existing.direction == lowerFirst.direction and existing.structureTime == pullback.endTime
+                                duplicate := true
+                                break
+                    if correctSequence and not duplicate
+                        bool pointConfirmed = pullback.confirmed
+                        int pointConfirmationTime = pointConfirmed ? f_unit_confirmation_time(pullback) : na
+                        float pointConfirmationPrice = pointConfirmed ? pullback.endPrice : na
+                        int delayBars = pointConfirmed ? math.max(0, pullback.endIndex - lowerFirst.structureIndex) : na
+                        int relativePosition = pullback.endPrice == lowerFirst.structurePrice ? 0 : lowerFirst.direction == 1 ? (pullback.endPrice > lowerFirst.structurePrice ? 1 : -1) : (pullback.endPrice < lowerFirst.structurePrice ? 1 : -1)
+                        int firstKnownTime = f_previous_point_known(previousPoints, layer, 2, lowerFirst.direction, pullback.endTime)
+                        array.push(points, BuySellPoint.new(layer, 2, lowerFirst.direction, lowerFirst.layer, lowerFirst.sourceDivergence, lowerFirst.sourceCenter, lowerPointIndex, relativePosition, pullbackIndex, pullbackIndex, pullback.endIndex, pullback.endTime, pointConfirmationTime, firstKnownTime, pullback.endPrice, pointConfirmationPrice, delayBars, pointConfirmed, true, false, pullback.endPrice, pullback.endIndex, pointConfirmed ? pointConfirmationTime : pullback.endTime, na, na))
 
     int centerCount = array.size(centers)
     if centerCount > 0
@@ -1080,68 +1297,308 @@ f_build_points(array<Unit> units, array<Center> centers, array<Divergence> diver
                 Unit retest = array.get(units, currentCenter.retestChild)
                 bool outsideCore = currentCenter.leaveDirection == 1 ? f_unit_low(retest) >= currentCenter.zg : f_unit_high(retest) <= currentCenter.zd
                 if outsideCore
-                    int proofIndex = currentCenter.retestChild + 1
-                    bool pointConfirmed = false
-                    int pointConfirmationTime = na
-                    float pointConfirmationPrice = na
+                    bool pointConfirmed = currentCenter.leaveState == 2 and retest.confirmed
+                    int pointConfirmationTime = pointConfirmed ? f_unit_confirmation_time(retest) : na
+                    float pointConfirmationPrice = pointConfirmed ? retest.endPrice : na
                     int evidenceStartIndex = retest.endIndex
-                    int evidenceStartTime = retest.endTime
-                    int delayBars = na
-                    int storedProofIndex = na
-                    if proofIndex < unitCount
-                        Unit proof = array.get(units, proofIndex)
-                        storedProofIndex := proofIndex
-                        if proof.direction == currentCenter.leaveDirection and proof.confirmed
-                            pointConfirmed := true
-                            pointConfirmationTime := f_unit_confirmation_time(proof)
-                            pointConfirmationPrice := proof.endPrice
-                            evidenceStartIndex := proof.endIndex
-                            evidenceStartTime := pointConfirmationTime
-                            delayBars := math.max(0, proof.endIndex - retest.endIndex)
+                    int evidenceStartTime = pointConfirmed ? pointConfirmationTime : retest.endTime
+                    int delayBars = pointConfirmed ? math.max(0, retest.endIndex - array.get(units, currentCenter.leaveChild).startIndex) : na
                     float invalidationPrice = currentCenter.leaveDirection == 1 ? currentCenter.zg : currentCenter.zd
                     int firstKnownTime = f_previous_point_known(previousPoints, layer, 3, currentCenter.leaveDirection, retest.endTime)
-                    array.push(points, BuySellPoint.new(layer, 3, currentCenter.leaveDirection, na, centerIndex, na, currentCenter.retestChild, storedProofIndex, retest.endIndex, retest.endTime, pointConfirmationTime, firstKnownTime, retest.endPrice, pointConfirmationPrice, delayBars, pointConfirmed, true, false, invalidationPrice, evidenceStartIndex, evidenceStartTime, na, na))
+                    array.push(points, BuySellPoint.new(layer, 3, currentCenter.leaveDirection, layer, na, centerIndex, na, 0, currentCenter.retestChild, currentCenter.retestChild, retest.endIndex, retest.endTime, pointConfirmationTime, firstKnownTime, retest.endPrice, pointConfirmationPrice, delayBars, pointConfirmed, true, false, invalidationPrice, evidenceStartIndex, evidenceStartTime, na, na))
 
     int pointCount = array.size(points)
     if pointCount > 0
         for pointIndex = 0 to pointCount - 1
             BuySellPoint currentPoint = array.get(points, pointIndex)
             if currentPoint.confirmed
-                int scanFrom = na(currentPoint.proofUnit) ? currentPoint.structureUnit + 1 : currentPoint.proofUnit + 1
-                if scanFrom < unitCount
-                    for unitIndex = scanFrom to unitCount - 1
-                        Unit currentUnit = array.get(units, unitIndex)
-                        bool violates = false
-                        if currentPoint.pointClass == 3 and currentPoint.sourceCenter < array.size(centers)
-                            Center sourceCenter = array.get(centers, currentPoint.sourceCenter)
-                            violates := f_unit_overlaps_center(currentUnit, sourceCenter.zd, sourceCenter.zg)
-                        else
-                            violates := currentPoint.direction == 1 ? f_unit_low(currentUnit) < currentPoint.invalidationPrice : f_unit_high(currentUnit) > currentPoint.invalidationPrice
-                        if violates
-                            if currentUnit.confirmed
+                if currentPoint.pointClass == 2
+                    int movementCount = array.size(completedMovements)
+                    if movementCount > 0
+                        for movementIndex = 0 to movementCount - 1
+                            Unit breakMovement = array.get(completedMovements, movementIndex)
+                            bool completedOpposingMovement = breakMovement.confirmed and breakMovement.direction == -currentPoint.direction and breakMovement.startTime >= currentPoint.structureTime
+                            if completedOpposingMovement
                                 currentPoint.valid := false
-                                currentPoint.evidenceEndIndex := currentUnit.endIndex
-                                currentPoint.evidenceEndTime := f_unit_confirmation_time(currentUnit)
+                                currentPoint.evidenceEndIndex := breakMovement.endIndex
+                                currentPoint.evidenceEndTime := f_unit_confirmation_time(breakMovement)
                                 break
-                            else
-                                currentPoint.invalidationCandidate := true
+                else
+                    int scanFrom = na(currentPoint.proofUnit) ? currentPoint.structureUnit + 1 : currentPoint.proofUnit + 1
+                    if scanFrom < unitCount
+                        for unitIndex = scanFrom to unitCount - 1
+                            Unit currentUnit = array.get(units, unitIndex)
+                            bool violates = false
+                            if currentPoint.pointClass == 3 and currentPoint.sourceCenter < array.size(centers)
+                                Center sourceCenter = array.get(centers, currentPoint.sourceCenter)
+                                violates := f_unit_overlaps_center(currentUnit, sourceCenter.zd, sourceCenter.zg)
+                            else if not na(currentPoint.invalidationPrice)
+                                violates := currentPoint.direction == 1 ? f_unit_low(currentUnit) < currentPoint.invalidationPrice : f_unit_high(currentUnit) > currentPoint.invalidationPrice
+                            if violates
+                                if currentUnit.confirmed
+                                    currentPoint.valid := false
+                                    currentPoint.evidenceEndIndex := currentUnit.endIndex
+                                    currentPoint.evidenceEndTime := f_unit_confirmation_time(currentUnit)
+                                    break
+                                else
+                                    currentPoint.invalidationCandidate := true
                 array.set(points, pointIndex, currentPoint)
 
-f_stroke_identity() =>
-    strokeMode == "严格笔" ? "strict" : "revised"
-
 f_event_prefix(string marketTimeframe) =>
-    syminfo.tickerid + "|" + marketTimeframe + "|stroke=" + f_stroke_identity()
+    syminfo.tickerid + "|TF=" + marketTimeframe + "|theory=" + THEORY_VERSION
 
 f_event_id(string marketTimeframe, int layer, string eventType, int direction, int structureTime) =>
-    f_event_prefix(marketTimeframe) + "|L" + str.tostring(layer) + "|" + eventType + "|" + str.tostring(direction) + "|" + str.tostring(structureTime)
+    f_event_prefix(marketTimeframe) + "|T" + str.tostring(layer) + "|" + eventType + "|" + str.tostring(direction) + "|" + str.tostring(structureTime)
 
-f_movement_context_id(string marketTimeframe, int layer, int sourceCenter, int structureTime) =>
-    "center_defined|tf=" + marketTimeframe + "|source_layer=" + str.tostring(layer) + "|center=" + str.tostring(sourceCenter) + "|anchor=" + str.tostring(structureTime)
+f_movement_context_id(string marketTimeframe, int layer, int structureTime) =>
+    "center_defined|TF=" + marketTimeframe + "|T" + str.tostring(layer) + "|anchor=" + str.tostring(structureTime)
 
 f_evidence_short(Evidence evidence) =>
     string kindText = evidence.kind == 1 ? "盘背" : evidence.kind == 2 ? "趋背" : evidence.kind == 11 ? "1点" : evidence.kind == 12 ? "2点" : "3点"
-    evidence.marketTimeframe + "·L" + str.tostring(evidence.layer) + "·" + kindText
+    evidence.marketTimeframe + "·T" + str.tostring(evidence.layer) + "·" + kindText
+
+f_structure_level_id(string structureKind, int layer) =>
+    structureKind == "fractal" ? "F" : structureKind == "stroke" ? "B" : structureKind == "segment" ? "S" : "T" + str.tostring(layer)
+
+f_snapshot_id(string marketTimeframe, string structureKind, int layer, int direction, int structureTime, int endTime) =>
+    f_event_prefix(marketTimeframe) + "|" + f_structure_level_id(structureKind, layer) + "|" + structureKind + "|" + str.tostring(direction) + "|" + str.tostring(structureTime) + "|" + str.tostring(endTime)
+
+f_fractal_structure_id(string marketTimeframe, Fractal fractal) =>
+    f_snapshot_id(marketTimeframe, "fractal", -2, fractal.kind, fractal.structureTime, fractal.structureTime)
+
+f_unit_structure_id(string marketTimeframe, string structureKind, int layer, Unit unit) =>
+    f_snapshot_id(marketTimeframe, structureKind, layer, unit.direction, unit.startTime, unit.endTime)
+
+f_center_structure_id(string marketTimeframe, Center center, array<Unit> sourceUnits, int layer) =>
+    int sourceStartTime = center.startTime
+    int sourceEndTime = center.confirmationTime
+    bool hasStableSources = center.startChild >= 0 and center.startChild + 2 < array.size(sourceUnits)
+    if hasStableSources
+        sourceStartTime := array.get(sourceUnits, center.startChild).startTime
+        sourceEndTime := array.get(sourceUnits, center.startChild + 2).endTime
+    f_snapshot_id(marketTimeframe, "center", layer, 0, sourceStartTime, sourceEndTime)
+
+f_divergence_structure_id(string marketTimeframe, Divergence divergence) =>
+    string kind = divergence.kind == 2 ? "trend_divergence" : "consolidation_divergence"
+    f_snapshot_id(marketTimeframe, kind, divergence.layer, divergence.direction, divergence.parentStartTime, divergence.structureTime)
+
+f_point_structure_id(string marketTimeframe, BuySellPoint point) =>
+    string kind = "point_" + str.tostring(point.pointClass)
+    f_snapshot_id(marketTimeframe, kind, point.layer, point.direction, point.structureTime, point.structureTime)
+
+f_indexed_unit_structure_id(string marketTimeframe, array<Unit> units, int unitIndex, string structureKind, int layer) =>
+    string result = "na"
+    if not na(unitIndex) and unitIndex >= 0 and unitIndex < array.size(units)
+        result := f_unit_structure_id(marketTimeframe, structureKind, layer, array.get(units, unitIndex))
+    result
+
+f_add_structure_snapshot(array<StructureSnapshot> snapshots, string marketTimeframe, string slotId, string structureKind, int layer, string structureId, string state, int structureTime, int knownTime, string sourceId, string reason) =>
+    array.push(snapshots, StructureSnapshot.new(marketTimeframe, slotId, structureKind, layer, structureId, state, structureTime, knownTime, sourceId, reason))
+
+f_collect_fractal_snapshots(array<StructureSnapshot> snapshots, string marketTimeframe, array<Fractal> endpoints) =>
+    int count = array.size(endpoints)
+    if count > 0
+        for i = 0 to count - 1
+            Fractal current = array.get(endpoints, i)
+            bool terminal = i == count - 1
+            string structureId = f_fractal_structure_id(marketTimeframe, current)
+            string state = terminal ? "candidate" : "confirmed"
+            string sourceId = "raw_time=" + str.tostring(current.structureTime) + "|kind=" + str.tostring(current.kind) + "|price=" + str.tostring(current.price)
+            f_add_structure_snapshot(snapshots, marketTimeframe, structureId, "fractal", -2, structureId, state, current.structureTime, current.confirmationTime, sourceId, terminal ? "terminal_endpoint" : "alternating_endpoint_frozen")
+
+f_collect_stroke_snapshots(array<StructureSnapshot> snapshots, string marketTimeframe, array<Unit> strokes, array<Fractal> endpoints) =>
+    int count = array.size(strokes)
+    if count > 0
+        for i = 0 to count - 1
+            Unit current = array.get(strokes, i)
+            string structureId = f_unit_structure_id(marketTimeframe, "stroke", -2, current)
+            string state = current.confirmed ? "confirmed" : "candidate"
+            int knownTime = current.confirmed ? (na(current.confirmationTime) ? current.endTime : current.confirmationTime) : time
+            string sourceId = "start=na|end=na"
+            if i + 1 < array.size(endpoints)
+                sourceId := "start=" + f_fractal_structure_id(marketTimeframe, array.get(endpoints, i)) + "|end=" + f_fractal_structure_id(marketTimeframe, array.get(endpoints, i + 1))
+            f_add_structure_snapshot(snapshots, marketTimeframe, structureId, "stroke", -2, structureId, state, current.endTime, knownTime, sourceId, current.confirmed ? "boundary_frozen" : "terminal_preview")
+
+f_collect_unit_snapshots(array<StructureSnapshot> snapshots, string marketTimeframe, array<Unit> units, string structureKind, int layer, array<Unit> sourceUnits, string sourceKind, int sourceLayer) =>
+    int count = array.size(units)
+    if count > 0
+        for i = 0 to count - 1
+            Unit current = array.get(units, i)
+            string structureId = f_unit_structure_id(marketTimeframe, structureKind, layer, current)
+            string state = current.confirmed ? "confirmed" : "candidate"
+            int knownTime = current.confirmed ? (na(current.confirmationTime) ? current.endTime : current.confirmationTime) : time
+            string sourceId = "first=" + f_indexed_unit_structure_id(marketTimeframe, sourceUnits, current.firstChild, sourceKind, sourceLayer) + "|last=" + f_indexed_unit_structure_id(marketTimeframe, sourceUnits, current.lastChild, sourceKind, sourceLayer)
+            f_add_structure_snapshot(snapshots, marketTimeframe, structureId, structureKind, layer, structureId, state, current.endTime, knownTime, sourceId, current.confirmed ? "boundary_frozen" : "terminal_preview")
+
+f_collect_center_snapshots(array<StructureSnapshot> snapshots, string marketTimeframe, array<Center> centers, array<Unit> sourceUnits, int layer) =>
+    int count = array.size(centers)
+    if count > 0
+        for i = 0 to count - 1
+            Center current = array.get(centers, i)
+            string sourceKind = layer == 0 ? "segment" : "movement"
+            int sourceLayer = layer - 1
+            string structureId = f_center_structure_id(marketTimeframe, current, sourceUnits, layer)
+            string state = current.confirmed ? "confirmed" : "candidate"
+            int knownTime = current.confirmed ? current.confirmationTime : time
+            string sourceId = "first=" + f_indexed_unit_structure_id(marketTimeframe, sourceUnits, current.startChild, sourceKind, sourceLayer) + "|third=" + f_indexed_unit_structure_id(marketTimeframe, sourceUnits, current.startChild + 2, sourceKind, sourceLayer) + "|last=" + f_indexed_unit_structure_id(marketTimeframe, sourceUnits, current.endChild, sourceKind, sourceLayer)
+            f_add_structure_snapshot(snapshots, marketTimeframe, structureId, "center", layer, structureId, state, current.endTime, knownTime, sourceId, current.confirmed ? "three_component_overlap" : "candidate_uses_unconfirmed_component")
+
+f_collect_trend_snapshot(array<StructureSnapshot> snapshots, string marketTimeframe, TrendState trend, array<Center> centers, array<Unit> sourceUnits, int layer) =>
+    if not na(trend) and trend.kind > 0 and trend.firstCenter >= 0 and trend.lastCenter < array.size(centers)
+        Center first = array.get(centers, trend.firstCenter)
+        Center last = array.get(centers, trend.lastCenter)
+        string structureId = f_snapshot_id(marketTimeframe, "trend_state", layer, trend.direction, first.startTime, last.endTime)
+        string state = trend.status == MOVEMENT_COMPLETED ? "confirmed" : "candidate"
+        string reason = trend.status == MOVEMENT_COMPLETED and trend.completionProof == MOVEMENT_COMPLETED_BY_PROMOTION ? "movement_completed_by_level_promotion" : trend.status == MOVEMENT_COMPLETED ? "movement_completed_by_reverse_component" : trend.status == MOVEMENT_COMPLETION_CANDIDATE ? "divergence_completion_candidate" : trend.status == MOVEMENT_QUALIFIED ? "movement_qualified" : "movement_forming"
+        int knownTime = trend.completionProof == MOVEMENT_COMPLETED_BY_PROMOTION ? last.promotionConfirmationTime : time
+        string sourceId = "first=" + f_center_structure_id(marketTimeframe, first, sourceUnits, layer) + "|last=" + f_center_structure_id(marketTimeframe, last, sourceUnits, layer) + "|completion_proof=" + str.tostring(trend.completionProof)
+        f_add_structure_snapshot(snapshots, marketTimeframe, f_event_prefix(marketTimeframe) + "|T" + str.tostring(layer) + "|trend_state|active", "trend_state", layer, structureId, state, last.endTime, knownTime, sourceId, reason)
+
+f_collect_divergence_snapshots(array<StructureSnapshot> snapshots, string marketTimeframe, array<Divergence> divergences, array<Unit> units, array<Center> centers, int layer) =>
+    int count = array.size(divergences)
+    if count > 0
+        for i = 0 to count - 1
+            Divergence current = array.get(divergences, i)
+            string kind = current.kind == 2 ? "trend_divergence" : "consolidation_divergence"
+            string structureId = f_divergence_structure_id(marketTimeframe, current)
+            string state = not current.valid ? "invalidated" : current.confirmed ? "confirmed" : "candidate"
+            int knownTime = state == "invalidated" ? current.evidenceEndTime : current.confirmed ? current.confirmationTime : current.firstKnownTime
+            string unitKind = layer == 0 ? "segment" : "movement"
+            int unitLayer = layer - 1
+            string sourceCenterId = current.centerIndex >= 0 and current.centerIndex < array.size(centers) ? f_center_structure_id(marketTimeframe, array.get(centers, current.centerIndex), units, layer) : "na"
+            string comparisonCenterId = current.comparisonCenter >= 0 and current.comparisonCenter < array.size(centers) ? f_center_structure_id(marketTimeframe, array.get(centers, current.comparisonCenter), units, layer) : "na"
+            string sourceId = current.kind == 2 ? "a=" + f_indexed_unit_structure_id(marketTimeframe, units, current.firstEnteringUnit, unitKind, unitLayer) + "|A=" + comparisonCenterId + "|b=" + f_indexed_unit_structure_id(marketTimeframe, units, current.enteringUnit, unitKind, unitLayer) + "|B=" + sourceCenterId + "|c=" + f_indexed_unit_structure_id(marketTimeframe, units, current.leavingUnit, unitKind, unitLayer) + "|3p=" + f_indexed_unit_structure_id(marketTimeframe, units, current.thirdPointUnit, unitKind, unitLayer) : "enter=" + f_indexed_unit_structure_id(marketTimeframe, units, current.enteringUnit, unitKind, unitLayer) + "|center=" + sourceCenterId + "|leave=" + f_indexed_unit_structure_id(marketTimeframe, units, current.leavingUnit, unitKind, unitLayer)
+            string reason = state == "invalidated" ? "confirmed_structure_crossed_invalidation" : current.confirmed ? "macd_area_weaker_on_confirmed_component" : "macd_area_weaker_on_candidate_component"
+            f_add_structure_snapshot(snapshots, marketTimeframe, structureId, kind, layer, structureId, state, current.structureTime, knownTime, sourceId, reason)
+
+f_collect_point_snapshots(array<StructureSnapshot> snapshots, string marketTimeframe, array<BuySellPoint> points, array<Unit> units, array<Divergence> divergences, array<Center> centers, array<BuySellPoint> lowerPoints, int layer) =>
+    int count = array.size(points)
+    if count > 0
+        for i = 0 to count - 1
+            BuySellPoint current = array.get(points, i)
+            string kind = "point_" + str.tostring(current.pointClass)
+            string structureId = f_point_structure_id(marketTimeframe, current)
+            string state = not current.valid ? "invalidated" : current.confirmed ? "confirmed" : "candidate"
+            int knownTime = state == "invalidated" ? current.evidenceEndTime : current.confirmed ? current.confirmationTime : current.firstKnownTime
+            string unitKind = layer == 0 ? "segment" : "movement"
+            int unitLayer = layer - 1
+            string sourceId = "source=T" + str.tostring(current.sourceLayer) + "|structure=" + f_indexed_unit_structure_id(marketTimeframe, units, current.structureUnit, unitKind, unitLayer) + "|proof=" + f_indexed_unit_structure_id(marketTimeframe, units, current.proofUnit, unitKind, unitLayer)
+            string causalSourceId = "na"
+            if current.pointClass == 1 and not na(current.sourceDivergence) and current.sourceDivergence >= 0 and current.sourceDivergence < array.size(divergences)
+                causalSourceId := f_divergence_structure_id(marketTimeframe, array.get(divergences, current.sourceDivergence))
+                sourceId += "|divergence=" + causalSourceId
+            else if current.pointClass == 2 and not na(current.linkedFirstPoint)
+                if current.sourceLayer == layer and current.linkedFirstPoint >= 0 and current.linkedFirstPoint < array.size(points)
+                    causalSourceId := f_point_structure_id(marketTimeframe, array.get(points, current.linkedFirstPoint))
+                else if current.sourceLayer == layer - 1 and current.linkedFirstPoint >= 0 and current.linkedFirstPoint < array.size(lowerPoints)
+                    causalSourceId := f_point_structure_id(marketTimeframe, array.get(lowerPoints, current.linkedFirstPoint))
+                sourceId += "|first_point=" + causalSourceId
+            else if current.pointClass == 3 and not na(current.sourceCenter) and current.sourceCenter >= 0 and current.sourceCenter < array.size(centers)
+                causalSourceId := f_center_structure_id(marketTimeframe, array.get(centers, current.sourceCenter), units, layer)
+                sourceId += "|center=" + causalSourceId
+            string reason = state == "invalidated" ? (current.pointClass == 2 ? "completed_opposing_movement" : "confirmed_structure_crossed_invalidation") : current.confirmed ? "point_structure_completed" : "point_structure_candidate"
+            f_add_structure_snapshot(snapshots, marketTimeframe, structureId, kind, layer, structureId, state, current.structureTime, knownTime, sourceId, reason)
+
+f_collect_reference_snapshots(array<StructureSnapshot> snapshots, string marketTimeframe, ReferenceEngine engine) =>
+    array<BuySellPoint> noLowerPoints = array.new<BuySellPoint>()
+    f_collect_fractal_snapshots(snapshots, marketTimeframe, engine.endpoints)
+    f_collect_stroke_snapshots(snapshots, marketTimeframe, engine.strokes, engine.endpoints)
+    f_collect_unit_snapshots(snapshots, marketTimeframe, engine.segmentsS, "segment", -1, engine.strokes, "stroke", -2)
+    f_collect_unit_snapshots(snapshots, marketTimeframe, engine.movementsT0, "movement", 0, engine.segmentsS, "segment", -1)
+    f_collect_unit_snapshots(snapshots, marketTimeframe, engine.movementsT1, "movement", 1, engine.movementsT0, "movement", 0)
+    f_collect_unit_snapshots(snapshots, marketTimeframe, engine.movementsT2, "movement", 2, engine.movementsT1, "movement", 1)
+    f_collect_center_snapshots(snapshots, marketTimeframe, engine.centersT0, engine.segmentsS, 0)
+    f_collect_center_snapshots(snapshots, marketTimeframe, engine.centersT1, engine.movementsT0, 1)
+    f_collect_center_snapshots(snapshots, marketTimeframe, engine.centersT2, engine.movementsT1, 2)
+    f_collect_trend_snapshot(snapshots, marketTimeframe, engine.trendT0, engine.centersT0, engine.segmentsS, 0)
+    f_collect_trend_snapshot(snapshots, marketTimeframe, engine.trendT1, engine.centersT1, engine.movementsT0, 1)
+    f_collect_trend_snapshot(snapshots, marketTimeframe, engine.trendT2, engine.centersT2, engine.movementsT1, 2)
+    f_collect_divergence_snapshots(snapshots, marketTimeframe, engine.divergencesT0, engine.segmentsS, engine.centersT0, 0)
+    f_collect_divergence_snapshots(snapshots, marketTimeframe, engine.divergencesT1, engine.movementsT0, engine.centersT1, 1)
+    f_collect_divergence_snapshots(snapshots, marketTimeframe, engine.divergencesT2, engine.movementsT1, engine.centersT2, 2)
+    f_collect_point_snapshots(snapshots, marketTimeframe, engine.pointsT0, engine.segmentsS, engine.divergencesT0, engine.centersT0, noLowerPoints, 0)
+    f_collect_point_snapshots(snapshots, marketTimeframe, engine.pointsT1, engine.movementsT0, engine.divergencesT1, engine.centersT1, engine.pointsT0, 1)
+    f_collect_point_snapshots(snapshots, marketTimeframe, engine.pointsT2, engine.movementsT1, engine.divergencesT2, engine.centersT2, engine.pointsT1, 2)
+
+f_collect_focus_snapshots(array<StructureSnapshot> snapshots, string marketTimeframe, array<Fractal> endpoints, array<Unit> strokes, array<Unit> segments, array<Unit> movements0, array<Unit> movements1, array<Unit> movements2, array<Unit> movements3, array<Center> centers0, array<Center> centers1, array<Center> centers2, array<Center> centers3, array<Divergence> divergences0, array<Divergence> divergences1, array<Divergence> divergences2, array<Divergence> divergences3, array<BuySellPoint> points0, array<BuySellPoint> points1, array<BuySellPoint> points2, array<BuySellPoint> points3, array<BuySellPoint> noLowerPoints, TrendState trend0, TrendState trend1, TrendState trend2, TrendState trend3) =>
+    f_collect_fractal_snapshots(snapshots, marketTimeframe, endpoints)
+    f_collect_stroke_snapshots(snapshots, marketTimeframe, strokes, endpoints)
+    f_collect_unit_snapshots(snapshots, marketTimeframe, segments, "segment", -1, strokes, "stroke", -2)
+    f_collect_unit_snapshots(snapshots, marketTimeframe, movements0, "movement", 0, segments, "segment", -1)
+    f_collect_unit_snapshots(snapshots, marketTimeframe, movements1, "movement", 1, movements0, "movement", 0)
+    f_collect_unit_snapshots(snapshots, marketTimeframe, movements2, "movement", 2, movements1, "movement", 1)
+    f_collect_unit_snapshots(snapshots, marketTimeframe, movements3, "movement", 3, movements2, "movement", 2)
+    f_collect_center_snapshots(snapshots, marketTimeframe, centers0, segments, 0)
+    f_collect_center_snapshots(snapshots, marketTimeframe, centers1, movements0, 1)
+    f_collect_center_snapshots(snapshots, marketTimeframe, centers2, movements1, 2)
+    f_collect_center_snapshots(snapshots, marketTimeframe, centers3, movements2, 3)
+    f_collect_trend_snapshot(snapshots, marketTimeframe, trend0, centers0, segments, 0)
+    f_collect_trend_snapshot(snapshots, marketTimeframe, trend1, centers1, movements0, 1)
+    f_collect_trend_snapshot(snapshots, marketTimeframe, trend2, centers2, movements1, 2)
+    f_collect_trend_snapshot(snapshots, marketTimeframe, trend3, centers3, movements2, 3)
+    f_collect_divergence_snapshots(snapshots, marketTimeframe, divergences0, segments, centers0, 0)
+    f_collect_divergence_snapshots(snapshots, marketTimeframe, divergences1, movements0, centers1, 1)
+    f_collect_divergence_snapshots(snapshots, marketTimeframe, divergences2, movements1, centers2, 2)
+    f_collect_divergence_snapshots(snapshots, marketTimeframe, divergences3, movements2, centers3, 3)
+    f_collect_point_snapshots(snapshots, marketTimeframe, points0, segments, divergences0, centers0, noLowerPoints, 0)
+    f_collect_point_snapshots(snapshots, marketTimeframe, points1, movements0, divergences1, centers1, points0, 1)
+    f_collect_point_snapshots(snapshots, marketTimeframe, points2, movements1, divergences2, centers2, points1, 2)
+    f_collect_point_snapshots(snapshots, marketTimeframe, points3, movements2, divergences3, centers3, points2, 3)
+
+f_append_lifecycle_event(array<LifecycleEvent> events, StructureSnapshot snapshot, string state, string reason) =>
+    int knownTime = state == "replaced" ? time : snapshot.knownTime
+    int sequence = array.size(events)
+    string eventId = snapshot.structureId + "|reason=" + reason + "|sequence=" + str.tostring(sequence)
+    array.push(events, LifecycleEvent.new(snapshot.structureId, state, snapshot.structureTime, knownTime, snapshot.sourceId, reason, eventId))
+
+f_reconcile_lifecycle(array<StructureSnapshot> previous, array<StructureSnapshot> current, array<LifecycleEvent> events) =>
+    int currentCount = array.size(current)
+    int previousCountBefore = array.size(previous)
+    map<string, int> previousIndexBySlot = map.new<string, int>()
+    map<string, int> currentIndexBySlot = map.new<string, int>()
+    if previousCountBefore > 0
+        for previousIndex = 0 to previousCountBefore - 1
+            map.put(previousIndexBySlot, array.get(previous, previousIndex).slotId, previousIndex)
+    if currentCount > 0
+        for currentIndex = 0 to currentCount - 1
+            map.put(currentIndexBySlot, array.get(current, currentIndex).slotId, currentIndex)
+    bool initializing = previousCountBefore == 0 and array.size(events) == 0
+    if initializing and currentCount > 0
+        for currentIndex = 0 to currentCount - 1
+            StructureSnapshot incoming = array.get(current, currentIndex)
+            f_append_lifecycle_event(events, incoming, incoming.state, incoming.reason)
+
+    if not initializing and currentCount > 0
+        for currentIndex = 0 to currentCount - 1
+            StructureSnapshot incoming = array.get(current, currentIndex)
+            int previousIndex = map.get(previousIndexBySlot, incoming.slotId)
+            if na(previousIndex)
+                f_append_lifecycle_event(events, incoming, incoming.state, incoming.reason)
+            else
+                StructureSnapshot old = array.get(previous, previousIndex)
+                if old.structureId != incoming.structureId
+                    if old.state == "candidate"
+                        f_append_lifecycle_event(events, old, "replaced", "more_extreme_or_new_terminal_candidate")
+                    f_append_lifecycle_event(events, incoming, incoming.state, incoming.reason)
+                else if old.state != incoming.state
+                    f_append_lifecycle_event(events, incoming, incoming.state, incoming.reason)
+                else if old.reason != incoming.reason
+                    f_append_lifecycle_event(events, incoming, incoming.state, incoming.reason)
+
+    int previousCount = array.size(previous)
+    if previousCount > 0
+        for previousIndex = 0 to previousCount - 1
+            StructureSnapshot old = array.get(previous, previousIndex)
+            int activeIndex = map.get(currentIndexBySlot, old.slotId)
+            bool stillActive = not na(activeIndex)
+            if not stillActive and old.state == "candidate"
+                f_append_lifecycle_event(events, old, "replaced", "candidate_no_longer_active")
+
+    array.clear(previous)
+    if currentCount > 0
+        for currentIndex = 0 to currentCount - 1
+            array.push(previous, array.get(current, currentIndex))
+    events
 
 f_upsert_evidence(array<Evidence> ledger, Evidence incoming) =>
     int replaceIndex = na
@@ -1175,7 +1632,7 @@ f_collect_layer_evidence(array<Evidence> ledger, int marketId, string marketTime
                     structureStartPrice := leaving.startPrice
                 string eventType = current.kind == 2 ? "trend_divergence" : "consolidation_divergence"
                 string eventId = f_event_id(marketTimeframe, current.layer, eventType, evidenceDirection, current.structureTime)
-                string movementContext = f_movement_context_id(marketTimeframe, current.layer, current.centerIndex, current.parentStartTime)
+                string movementContext = f_movement_context_id(marketTimeframe, current.layer, current.parentStartTime)
                 Evidence evidence = Evidence.new(marketId, marketTimeframe, current.layer, current.kind, evidenceDirection, current.confirmed, current.invalidationCandidate, current.centerIndex, current.parentStartTime, current.structureTime, current.confirmationTime, knownTime, current.evidenceStartTime, current.evidenceEndTime, current.structurePrice, structureStartPrice, current.confirmationPrice, current.invalidationPrice, movementContext, eventId)
                 f_upsert_evidence(ledger, evidence)
 
@@ -1194,7 +1651,7 @@ f_collect_layer_evidence(array<Evidence> ledger, int marketId, string marketTime
                 int knownTime = current.confirmed ? current.confirmationTime : current.firstKnownTime
                 string eventType = "point_" + str.tostring(current.pointClass)
                 string eventId = f_event_id(marketTimeframe, current.layer, eventType, current.direction, current.structureTime)
-                string movementContext = f_movement_context_id(marketTimeframe, current.layer, current.sourceCenter, intervalStartTime)
+                string movementContext = f_movement_context_id(marketTimeframe, current.layer, intervalStartTime)
                 Evidence evidence = Evidence.new(marketId, marketTimeframe, current.layer, 10 + current.pointClass, current.direction, current.confirmed, current.invalidationCandidate, current.sourceCenter, intervalStartTime, current.structureTime, current.confirmationTime, knownTime, current.evidenceStartTime, current.evidenceEndTime, current.structurePrice, structureStartPrice, current.confirmationPrice, current.invalidationPrice, movementContext, eventId)
                 f_upsert_evidence(ledger, evidence)
 
@@ -1210,7 +1667,7 @@ f_collect_nesting_evidence(array<Evidence> ledger, string marketTimeframe, array
                 int knownTime = current.confirmed ? current.confirmationTime : current.firstKnownTime
                 string eventType = current.kind == 2 ? "trend_divergence" : "consolidation_divergence"
                 string eventId = f_event_id(marketTimeframe, current.layer, eventType, evidenceDirection, current.structureTime)
-                string movementContext = f_movement_context_id(marketTimeframe, current.layer, current.centerIndex, current.parentStartTime)
+                string movementContext = f_movement_context_id(marketTimeframe, current.layer, current.parentStartTime)
                 array.push(ledger, Evidence.new(0, marketTimeframe, current.layer, current.kind, evidenceDirection, current.confirmed, current.invalidationCandidate, current.centerIndex, current.parentStartTime, current.structureTime, current.confirmationTime, knownTime, current.evidenceStartTime, current.evidenceEndTime, current.structurePrice, leaving.startPrice, current.confirmationPrice, current.invalidationPrice, movementContext, eventId))
 
 f_build_resonances(array<Evidence> ledger, array<Resonance> resonances) =>
@@ -1360,7 +1817,7 @@ f_build_nesting(array<Evidence> ledger) =>
                 parentStartPrice := child.structureStartPrice
                 parentEndPrice := child.structurePrice
         bool partial = depth < root.layer + 1
-        string eventId = f_event_prefix(timeframe.period) + "|nesting|" + str.tostring(root.direction) + "|L" + str.tostring(root.layer) + "|" + str.tostring(root.structureTime) + "|components=" + componentIds
+        string eventId = f_event_prefix(timeframe.period) + "|nesting|" + str.tostring(root.direction) + "|T" + str.tostring(root.layer) + "|" + str.tostring(root.structureTime) + "|components=" + componentIds
         result := NestingState.new(true, root.direction, chainConfirmed, partial, root.layer, depth, root.structureStartTime, parentEndTime, chainKnownTime, root.structurePrice, componentIds, componentText, eventId)
     result
 
@@ -1386,7 +1843,7 @@ f_add_scenario(array<Scenario> scenarios, array<Scenario> previous, int layer, i
                 duplicate := true
                 break
     if not duplicate and scenarioCount < 5
-        string eventId = f_event_prefix(timeframe.period) + "|L" + str.tostring(layer) + "|scenario|" + str.tostring(kind) + "|" + str.tostring(direction) + "|" + str.tostring(sourceTime)
+        string eventId = f_event_prefix(timeframe.period) + "|T" + str.tostring(layer) + "|scenario|" + str.tostring(kind) + "|" + str.tostring(direction) + "|" + str.tostring(sourceTime)
         int knownTime = f_previous_scenario_known(previous, layer, kind, direction, sourceTime)
         array.push(scenarios, Scenario.new(layer, kind, direction, sourceIndex, sourceTime, knownTime, anchorPrice, triggerPrice, invalidationPrice, name, triggerText, invalidationText, eventId))
 
@@ -1440,7 +1897,7 @@ f_json_float(float value) =>
 
 f_json_payload(string eventId, string marketTimeframe, int layer, string movementContext, int direction, string eventType, string status, int structureTime, float structurePrice, int confirmationTime, float confirmationPrice, int sourceCenter, string evidenceSummary, string messageZh) =>
     string directionText = direction == 1 ? "buy" : direction == -1 ? "sell" : "neutral"
-    "{\"event_id\":\"" + f_json_escape(eventId) + "\",\"symbol\":\"" + f_json_escape(syminfo.tickerid) + "\",\"market_timeframe\":\"" + f_json_escape(marketTimeframe) + "\",\"stroke_mode\":\"" + f_stroke_identity() + "\",\"structure_layer\":" + str.tostring(layer) + ",\"trend_level\":\"" + f_json_escape(movementContext) + "\",\"direction\":\"" + directionText + "\",\"type\":\"" + eventType + "\",\"status\":\"" + status + "\",\"structure_time\":" + f_json_int(structureTime) + ",\"structure_price\":" + f_json_float(structurePrice) + ",\"confirmation_time\":" + f_json_int(confirmationTime) + ",\"confirmation_price\":" + f_json_float(confirmationPrice) + ",\"source_center\":" + f_json_int(sourceCenter) + ",\"evidence\":\"" + f_json_escape(evidenceSummary) + "\",\"message_zh\":\"" + f_json_escape(messageZh) + "\"}"
+    "{\"event_id\":\"" + f_json_escape(eventId) + "\",\"symbol\":\"" + f_json_escape(syminfo.tickerid) + "\",\"market_timeframe\":\"" + f_json_escape(marketTimeframe) + "\",\"theory_version\":\"" + THEORY_VERSION + "\",\"stroke_definition\":\"course_new\",\"trend_level\":\"T" + str.tostring(layer) + "\",\"movement_context\":\"" + f_json_escape(movementContext) + "\",\"direction\":\"" + directionText + "\",\"type\":\"" + eventType + "\",\"status\":\"" + status + "\",\"structure_time\":" + f_json_int(structureTime) + ",\"structure_price\":" + f_json_float(structurePrice) + ",\"confirmation_time\":" + f_json_int(confirmationTime) + ",\"confirmation_price\":" + f_json_float(confirmationPrice) + ",\"source_center\":" + f_json_int(sourceCenter) + ",\"evidence\":\"" + f_json_escape(evidenceSummary) + "\",\"message_zh\":\"" + f_json_escape(messageZh) + "\"}"
 
 f_event_was_emitted(array<string> emittedIds, string eventId) =>
     bool found = false
@@ -1476,7 +1933,7 @@ f_evidence_payload(Evidence evidence) =>
     string messageZh = f_evidence_short(evidence) + (evidence.confirmed ? " 已确认" : " 候选") + (evidence.invalidationCandidate ? "，当前价格越界但等待结构确认失效" : "")
     f_json_payload(evidence.eventId, evidence.marketTimeframe, evidence.layer, evidence.movementContext, evidence.direction, eventType, status, evidence.structureTime, evidence.structurePrice, evidence.confirmationTime, evidence.confirmationPrice, evidence.sourceIndex, evidenceSummary, messageZh)
 
-f_process_reference_bar(bool enabled, int sourceTime, float sourceHigh, float sourceLow, float sourceDif, float sourceHist, int knownTime, int minimumStrokeDistance, ReferenceState state, array<KBar> bars, array<Fractal> endpoints, array<Unit> strokes, array<float> pendingHighs, array<float> pendingLows, array<int> pendingIndices, array<int> pendingTimes, array<float> histValues, array<float> difValues, bool allowConfirmation) =>
+f_process_reference_bar(bool enabled, int sourceTime, float sourceHigh, float sourceLow, float sourceDif, float sourceHist, int knownTime, ReferenceState state, array<KBar> bars, array<Fractal> endpoints, array<Unit> strokes, array<float> pendingHighs, array<float> pendingLows, array<int> pendingIndices, array<int> pendingTimes, array<float> histValues, array<float> difValues, bool allowConfirmation) =>
     bool newConfirmedBar = enabled and not na(sourceTime) and (na(state.lastSourceTime) or sourceTime != state.lastSourceTime)
     if newConfirmedBar
         int sourceIndex = state.nextIndex
@@ -1508,33 +1965,72 @@ f_process_reference_bar(bool enabled, int sourceTime, float sourceHigh, float so
         if appendedSynthetic
             Fractal confirmedFractal = f_detect_confirmed_fractal(bars, knownTime)
             if not na(confirmedFractal)
-                f_update_strokes(bars, endpoints, strokes, confirmedFractal, minimumStrokeDistance, histValues, difValues, allowConfirmation)
+                bool structuresChanged = f_update_strokes(bars, endpoints, strokes, confirmedFractal, histValues, difValues, allowConfirmation)
+                state.structuresDirty := state.structuresDirty or structuresChanged
         if not allowConfirmation
             f_extend_terminal_candidate(strokes, sourceIndex, sourceTime, sourceHigh, sourceLow, histValues, difValues)
     state
 
-f_ingest_reference(bool enabled, int sourceTime, float sourceHigh, float sourceLow, float sourceDif, float sourceHist, int knownTime, int minimumStrokeDistance, ReferenceEngine engine, bool allowConfirmation) =>
-    engine.state := f_process_reference_bar(enabled, sourceTime, sourceHigh, sourceLow, sourceDif, sourceHist, knownTime, minimumStrokeDistance, engine.state, engine.bars, engine.endpoints, engine.strokes, engine.pendingHighs, engine.pendingLows, engine.pendingIndices, engine.pendingTimes, engine.histValues, engine.difValues, allowConfirmation)
+f_ingest_reference(bool enabled, int sourceTime, float sourceHigh, float sourceLow, float sourceDif, float sourceHist, int knownTime, ReferenceEngine engine, bool allowConfirmation) =>
+    engine.state := f_process_reference_bar(enabled, sourceTime, sourceHigh, sourceLow, sourceDif, sourceHist, knownTime, engine.state, engine.bars, engine.endpoints, engine.strokes, engine.pendingHighs, engine.pendingLows, engine.pendingIndices, engine.pendingTimes, engine.histValues, engine.difValues, allowConfirmation)
     engine
 
 f_build_reference_engine(ReferenceEngine engine) =>
-    f_build_recursive_layer(engine.strokes, engine.segmentsL1, 1, engine.histValues, engine.difValues)
-    f_build_recursive_layer(engine.segmentsL1, engine.segmentsL2, 2, engine.histValues, engine.difValues)
-    f_build_centers(engine.strokes, engine.centersL0, 0)
-    f_build_centers(engine.segmentsL1, engine.centersL1, 1)
-    f_build_centers(engine.segmentsL2, engine.centersL2, 2)
-    f_link_center_promotions(engine.centersL0, engine.centersL1)
-    f_link_center_promotions(engine.centersL1, engine.centersL2)
-    f_build_divergences(engine.strokes, engine.centersL0, engine.divergencesL0, 0, MACD_WARMUP_BARS)
-    f_build_divergences(engine.segmentsL1, engine.centersL1, engine.divergencesL1, 1, MACD_WARMUP_BARS)
-    f_build_divergences(engine.segmentsL2, engine.centersL2, engine.divergencesL2, 2, MACD_WARMUP_BARS)
-    f_build_points(engine.strokes, engine.centersL0, engine.divergencesL0, engine.pointsL0, 0)
-    f_build_points(engine.segmentsL1, engine.centersL1, engine.divergencesL1, engine.pointsL1, 1)
-    f_build_points(engine.segmentsL2, engine.centersL2, engine.divergencesL2, engine.pointsL2, 2)
-    engine.trendL0 := f_get_trend_state(engine.centersL0, engine.divergencesL0, 0)
-    engine.trendL1 := f_get_trend_state(engine.centersL1, engine.divergencesL1, 1)
-    engine.trendL2 := f_get_trend_state(engine.centersL2, engine.divergencesL2, 2)
+    array<BuySellPoint> noLowerPoints = array.new<BuySellPoint>()
+    f_build_recursive_layer(engine.strokes, engine.segmentsS, -1, engine.histValues, engine.difValues)
+    f_build_centers(engine.segmentsS, engine.centersT0, 0)
+    f_build_divergences(engine.segmentsS, engine.centersT0, engine.divergencesT0, 0, MACD_WARMUP_BARS)
+    f_build_completed_movements(engine.segmentsS, engine.centersT0, engine.divergencesT0, engine.movementsT0, 0, engine.histValues, engine.difValues)
+
+    f_build_centers(engine.movementsT0, engine.centersT1, 1)
+    f_build_divergences(engine.movementsT0, engine.centersT1, engine.divergencesT1, 1, MACD_WARMUP_BARS)
+    f_build_completed_movements(engine.movementsT0, engine.centersT1, engine.divergencesT1, engine.movementsT1, 1, engine.histValues, engine.difValues)
+
+    f_build_centers(engine.movementsT1, engine.centersT2, 2)
+    f_build_divergences(engine.movementsT1, engine.centersT2, engine.divergencesT2, 2, MACD_WARMUP_BARS)
+    f_build_completed_movements(engine.movementsT1, engine.centersT2, engine.divergencesT2, engine.movementsT2, 2, engine.histValues, engine.difValues)
+    f_link_center_promotions(engine.centersT0, engine.centersT1, engine.movementsT0)
+    f_link_center_promotions(engine.centersT1, engine.centersT2, engine.movementsT1)
+    f_build_points(engine.segmentsS, engine.centersT0, engine.divergencesT0, engine.movementsT0, noLowerPoints, engine.pointsT0, 0)
+    f_build_points(engine.movementsT0, engine.centersT1, engine.divergencesT1, engine.movementsT1, engine.pointsT0, engine.pointsT1, 1)
+    f_build_points(engine.movementsT1, engine.centersT2, engine.divergencesT2, engine.movementsT2, engine.pointsT1, engine.pointsT2, 2)
+    engine.trendT0 := f_get_trend_state(engine.centersT0, engine.divergencesT0, engine.movementsT0, 0)
+    engine.trendT1 := f_get_trend_state(engine.centersT1, engine.divergencesT1, engine.movementsT1, 1)
+    engine.trendT2 := f_get_trend_state(engine.centersT2, engine.divergencesT2, engine.movementsT2, 2)
+    engine.state.structuresDirty := false
     engine
+
+f_build_focus_hierarchy(array<Unit> sourceStrokes, array<float> histValues, array<float> difValues, array<Unit> segments, array<Unit> movements0, array<Unit> movements1, array<Unit> movements2, array<Unit> movements3, array<Center> centers0, array<Center> centers1, array<Center> centers2, array<Center> centers3, array<Divergence> divergences0, array<Divergence> divergences1, array<Divergence> divergences2, array<Divergence> divergences3, array<BuySellPoint> points0, array<BuySellPoint> points1, array<BuySellPoint> points2, array<BuySellPoint> points3) =>
+    array<BuySellPoint> noLowerPoints = array.new<BuySellPoint>()
+    f_build_recursive_layer(sourceStrokes, segments, -1, histValues, difValues)
+    f_build_centers(segments, centers0, 0)
+    f_build_divergences(segments, centers0, divergences0, 0, MACD_WARMUP_BARS)
+    f_build_completed_movements(segments, centers0, divergences0, movements0, 0, histValues, difValues)
+
+    f_build_centers(movements0, centers1, 1)
+    f_build_divergences(movements0, centers1, divergences1, 1, MACD_WARMUP_BARS)
+    f_build_completed_movements(movements0, centers1, divergences1, movements1, 1, histValues, difValues)
+
+    f_build_centers(movements1, centers2, 2)
+    f_build_divergences(movements1, centers2, divergences2, 2, MACD_WARMUP_BARS)
+    f_build_completed_movements(movements1, centers2, divergences2, movements2, 2, histValues, difValues)
+
+    f_build_centers(movements2, centers3, 3)
+    f_build_divergences(movements2, centers3, divergences3, 3, MACD_WARMUP_BARS)
+    f_build_completed_movements(movements2, centers3, divergences3, movements3, 3, histValues, difValues)
+
+    f_link_center_promotions(centers0, centers1, movements0)
+    f_link_center_promotions(centers1, centers2, movements1)
+    f_link_center_promotions(centers2, centers3, movements2)
+    f_build_points(segments, centers0, divergences0, movements0, noLowerPoints, points0, 0)
+    f_build_points(movements0, centers1, divergences1, movements1, points0, points1, 1)
+    f_build_points(movements1, centers2, divergences2, movements2, points1, points2, 2)
+    f_build_points(movements2, centers3, divergences3, movements3, points2, points3, 3)
+    TrendState state0 = f_get_trend_state(centers0, divergences0, movements0, 0)
+    TrendState state1 = f_get_trend_state(centers1, divergences1, movements1, 1)
+    TrendState state2 = f_get_trend_state(centers2, divergences2, movements2, 2)
+    TrendState state3 = f_get_trend_state(centers3, divergences3, movements3, 3)
+    [state0, state1, state2, state3]
 
 // -----------------------------------------------------------------------------
 // Focus-timeframe incremental engine
@@ -1566,8 +2062,6 @@ bool manualReferenceConfigurationValid = (not referenceRequested1 or referenceCo
 if barstate.isfirst and not useAutoReferences and not manualReferenceConfigurationValid
     runtime.error("手动参考周期必须唯一且严格高于当前图表周期")
 int activeReferenceCount = (referenceEnabled1 ? 1 : 0) + (referenceEnabled2 ? 1 : 0) + (referenceEnabled3 ? 1 : 0) + (referenceEnabled4 ? 1 : 0)
-int minimumStrokeDistance = strokeMode == "严格笔" ? 4 : 3
-
 int referenceSourceTime1 = na
 float referenceSourceHigh1 = na
 float referenceSourceLow1 = na
@@ -1668,10 +2162,22 @@ var ReferenceEngine referencePreviewEngine1 = f_new_reference_engine()
 var ReferenceEngine referencePreviewEngine2 = f_new_reference_engine()
 var ReferenceEngine referencePreviewEngine3 = f_new_reference_engine()
 var ReferenceEngine referencePreviewEngine4 = f_new_reference_engine()
-referenceEngine1 := f_ingest_reference(referenceEnabled1, referenceSourceTime1, referenceSourceHigh1, referenceSourceLow1, referenceSourceDif1, referenceSourceHist1, time, minimumStrokeDistance, referenceEngine1, true)
-referenceEngine2 := f_ingest_reference(referenceEnabled2, referenceSourceTime2, referenceSourceHigh2, referenceSourceLow2, referenceSourceDif2, referenceSourceHist2, time, minimumStrokeDistance, referenceEngine2, true)
-referenceEngine3 := f_ingest_reference(referenceEnabled3, referenceSourceTime3, referenceSourceHigh3, referenceSourceLow3, referenceSourceDif3, referenceSourceHist3, time, minimumStrokeDistance, referenceEngine3, true)
-referenceEngine4 := f_ingest_reference(referenceEnabled4, referenceSourceTime4, referenceSourceHigh4, referenceSourceLow4, referenceSourceDif4, referenceSourceHist4, time, minimumStrokeDistance, referenceEngine4, true)
+referenceEngine1 := f_ingest_reference(referenceEnabled1, referenceSourceTime1, referenceSourceHigh1, referenceSourceLow1, referenceSourceDif1, referenceSourceHist1, time, referenceEngine1, true)
+referenceEngine2 := f_ingest_reference(referenceEnabled2, referenceSourceTime2, referenceSourceHigh2, referenceSourceLow2, referenceSourceDif2, referenceSourceHist2, time, referenceEngine2, true)
+referenceEngine3 := f_ingest_reference(referenceEnabled3, referenceSourceTime3, referenceSourceHigh3, referenceSourceLow3, referenceSourceDif3, referenceSourceHist3, time, referenceEngine3, true)
+referenceEngine4 := f_ingest_reference(referenceEnabled4, referenceSourceTime4, referenceSourceHigh4, referenceSourceLow4, referenceSourceDif4, referenceSourceHist4, time, referenceEngine4, true)
+bool referenceStructuresDirty1 = referenceEngine1.state.structuresDirty
+bool referenceStructuresDirty2 = referenceEngine2.state.structuresDirty
+bool referenceStructuresDirty3 = referenceEngine3.state.structuresDirty
+bool referenceStructuresDirty4 = referenceEngine4.state.structuresDirty
+if referenceStructuresDirty1
+    referenceEngine1 := f_build_reference_engine(referenceEngine1)
+if referenceStructuresDirty2
+    referenceEngine2 := f_build_reference_engine(referenceEngine2)
+if referenceStructuresDirty3
+    referenceEngine3 := f_build_reference_engine(referenceEngine3)
+if referenceStructuresDirty4
+    referenceEngine4 := f_build_reference_engine(referenceEngine4)
 
 var array<KBar> syntheticBars = array.new<KBar>()
 var array<Fractal> baseFractals = array.new<Fractal>()
@@ -1682,21 +2188,31 @@ var array<Fractal> viewStrokeEndpoints = array.new<Fractal>()
 var array<Unit> viewStrokes = array.new<Unit>()
 var array<float> viewMacdHistValues = array.new<float>()
 var array<float> viewDifValues = array.new<float>()
-var array<Unit> segmentsL1 = array.new<Unit>()
-var array<Unit> segmentsL2 = array.new<Unit>()
-var array<Unit> segmentsL3 = array.new<Unit>()
-var array<Center> centersL0 = array.new<Center>()
-var array<Center> centersL1 = array.new<Center>()
-var array<Center> centersL2 = array.new<Center>()
-var array<Center> centersL3 = array.new<Center>()
-var array<Divergence> divergencesL0 = array.new<Divergence>()
-var array<Divergence> divergencesL1 = array.new<Divergence>()
-var array<Divergence> divergencesL2 = array.new<Divergence>()
-var array<Divergence> divergencesL3 = array.new<Divergence>()
-var array<BuySellPoint> pointsL0 = array.new<BuySellPoint>()
-var array<BuySellPoint> pointsL1 = array.new<BuySellPoint>()
-var array<BuySellPoint> pointsL2 = array.new<BuySellPoint>()
-var array<BuySellPoint> pointsL3 = array.new<BuySellPoint>()
+var array<Unit> segmentsS = array.new<Unit>()
+var array<Unit> movementsT0 = array.new<Unit>()
+var array<Unit> movementsT1 = array.new<Unit>()
+var array<Unit> movementsT2 = array.new<Unit>()
+var array<Unit> movementsT3 = array.new<Unit>()
+var array<Center> centersT0 = array.new<Center>()
+var array<Center> centersT1 = array.new<Center>()
+var array<Center> centersT2 = array.new<Center>()
+var array<Center> centersT3 = array.new<Center>()
+var array<Divergence> divergencesT0 = array.new<Divergence>()
+var array<Divergence> divergencesT1 = array.new<Divergence>()
+var array<Divergence> divergencesT2 = array.new<Divergence>()
+var array<Divergence> divergencesT3 = array.new<Divergence>()
+var array<BuySellPoint> pointsT0 = array.new<BuySellPoint>()
+var array<BuySellPoint> pointsT1 = array.new<BuySellPoint>()
+var array<BuySellPoint> pointsT2 = array.new<BuySellPoint>()
+var array<BuySellPoint> pointsT3 = array.new<BuySellPoint>()
+var array<BuySellPoint> noLowerPointSources = array.new<BuySellPoint>()
+varip array<StructureSnapshot> previousFocusStructureSnapshots = array.new<StructureSnapshot>()
+varip array<StructureSnapshot> previousReferenceStructureSnapshots1 = array.new<StructureSnapshot>()
+varip array<StructureSnapshot> previousReferenceStructureSnapshots2 = array.new<StructureSnapshot>()
+varip array<StructureSnapshot> previousReferenceStructureSnapshots3 = array.new<StructureSnapshot>()
+varip array<StructureSnapshot> previousReferenceStructureSnapshots4 = array.new<StructureSnapshot>()
+var array<StructureSnapshot> currentStructureSnapshots = array.new<StructureSnapshot>()
+var array<LifecycleEvent> lifecycleEvents = array.new<LifecycleEvent>()
 var array<Evidence> activeEvidence = array.new<Evidence>()
 var array<Evidence> nestingEvidence = array.new<Evidence>()
 var array<Resonance> activeResonances = array.new<Resonance>()
@@ -1704,10 +2220,10 @@ var NestingState nestingState = na
 var array<Scenario> activeScenarios = array.new<Scenario>()
 varip array<string> emittedEventIds = array.new<string>()
 varip bool alertBaselineReady = false
-var TrendState trendL0 = na
-var TrendState trendL1 = na
-var TrendState trendL2 = na
-var TrendState trendL3 = na
+var TrendState trendT0 = na
+var TrendState trendT1 = na
+var TrendState trendT2 = na
+var TrendState trendT3 = na
 var array<float> pendingHighs = array.new<float>()
 var array<float> pendingLows = array.new<float>()
 var array<int> pendingIndices = array.new<int>()
@@ -1719,6 +2235,7 @@ var int seedDirection = 0
 var int lastProcessedRawIndex = na
 var int dataStartTime = na
 var int reliableStartTime = na
+var bool focusStructuresDirty = false
 
 float normalizedHigh = math.round_to_mintick(high)
 float normalizedLow = math.round_to_mintick(low)
@@ -1756,10 +2273,38 @@ if confirmedRawBar and (na(lastProcessedRawIndex) or bar_index != lastProcessedR
         Fractal confirmedFractal = f_detect_confirmed_fractal(syntheticBars, time)
         if not na(confirmedFractal)
             array.push(baseFractals, confirmedFractal)
-            f_update_strokes(syntheticBars, strokeEndpoints, strokes, confirmedFractal, minimumStrokeDistance, macdHistValues, difValues, true)
+            bool structuresChanged = f_update_strokes(syntheticBars, strokeEndpoints, strokes, confirmedFractal, macdHistValues, difValues, true)
+            focusStructuresDirty := focusStructuresDirty or structuresChanged
 
-    if na(reliableStartTime) and bar_index >= MACD_WARMUP_BARS and f_has_reliable_confirmed_center(strokes, MACD_WARMUP_BARS)
-        reliableStartTime := time
+bool focusReplayDirty = confirmedRawBar and focusStructuresDirty
+if focusReplayDirty
+    [historyTrendT0, historyTrendT1, historyTrendT2, historyTrendT3] = f_build_focus_hierarchy(strokes, macdHistValues, difValues, segmentsS, movementsT0, movementsT1, movementsT2, movementsT3, centersT0, centersT1, centersT2, centersT3, divergencesT0, divergencesT1, divergencesT2, divergencesT3, pointsT0, pointsT1, pointsT2, pointsT3)
+    trendT0 := historyTrendT0
+    trendT1 := historyTrendT1
+    trendT2 := historyTrendT2
+    trendT3 := historyTrendT3
+    focusStructuresDirty := false
+
+if focusReplayDirty
+    array.clear(currentStructureSnapshots)
+    f_collect_focus_snapshots(currentStructureSnapshots, timeframe.period, strokeEndpoints, strokes, segmentsS, movementsT0, movementsT1, movementsT2, movementsT3, centersT0, centersT1, centersT2, centersT3, divergencesT0, divergencesT1, divergencesT2, divergencesT3, pointsT0, pointsT1, pointsT2, pointsT3, noLowerPointSources, trendT0, trendT1, trendT2, trendT3)
+    lifecycleEvents := f_reconcile_lifecycle(previousFocusStructureSnapshots, currentStructureSnapshots, lifecycleEvents)
+if referenceStructuresDirty1
+    array.clear(currentStructureSnapshots)
+    f_collect_reference_snapshots(currentStructureSnapshots, referenceTimeframe1, referenceEngine1)
+    lifecycleEvents := f_reconcile_lifecycle(previousReferenceStructureSnapshots1, currentStructureSnapshots, lifecycleEvents)
+if referenceStructuresDirty2
+    array.clear(currentStructureSnapshots)
+    f_collect_reference_snapshots(currentStructureSnapshots, referenceTimeframe2, referenceEngine2)
+    lifecycleEvents := f_reconcile_lifecycle(previousReferenceStructureSnapshots2, currentStructureSnapshots, lifecycleEvents)
+if referenceStructuresDirty3
+    array.clear(currentStructureSnapshots)
+    f_collect_reference_snapshots(currentStructureSnapshots, referenceTimeframe3, referenceEngine3)
+    lifecycleEvents := f_reconcile_lifecycle(previousReferenceStructureSnapshots3, currentStructureSnapshots, lifecycleEvents)
+if referenceStructuresDirty4
+    array.clear(currentStructureSnapshots)
+    f_collect_reference_snapshots(currentStructureSnapshots, referenceTimeframe4, referenceEngine4)
+    lifecycleEvents := f_reconcile_lifecycle(previousReferenceStructureSnapshots4, currentStructureSnapshots, lifecycleEvents)
 
 if barstate.islast
     viewSyntheticBars := f_copy_kbars(syntheticBars)
@@ -1791,88 +2336,83 @@ if barstate.islast
         if previewAppendedSynthetic
             Fractal previewFractal = f_detect_confirmed_fractal(viewSyntheticBars, na)
             if not na(previewFractal)
-                f_update_strokes(viewSyntheticBars, viewStrokeEndpoints, viewStrokes, previewFractal, minimumStrokeDistance, viewMacdHistValues, viewDifValues, false)
+                f_update_strokes(viewSyntheticBars, viewStrokeEndpoints, viewStrokes, previewFractal, viewMacdHistValues, viewDifValues, false)
         f_extend_terminal_candidate(viewStrokes, bar_index, time, normalizedHigh, normalizedLow, viewMacdHistValues, viewDifValues)
 
-    f_build_recursive_layer(viewStrokes, segmentsL1, 1, viewMacdHistValues, viewDifValues)
-    f_build_recursive_layer(segmentsL1, segmentsL2, 2, viewMacdHistValues, viewDifValues)
-    f_build_recursive_layer(segmentsL2, segmentsL3, 3, viewMacdHistValues, viewDifValues)
-    f_build_centers(viewStrokes, centersL0, 0)
-    f_build_centers(segmentsL1, centersL1, 1)
-    f_build_centers(segmentsL2, centersL2, 2)
-    f_build_centers(segmentsL3, centersL3, 3)
-    f_link_center_promotions(centersL0, centersL1)
-    f_link_center_promotions(centersL1, centersL2)
-    f_link_center_promotions(centersL2, centersL3)
-    f_build_divergences(viewStrokes, centersL0, divergencesL0, 0, MACD_WARMUP_BARS)
-    f_build_divergences(segmentsL1, centersL1, divergencesL1, 1, MACD_WARMUP_BARS)
-    f_build_divergences(segmentsL2, centersL2, divergencesL2, 2, MACD_WARMUP_BARS)
-    f_build_divergences(segmentsL3, centersL3, divergencesL3, 3, MACD_WARMUP_BARS)
-    f_build_points(viewStrokes, centersL0, divergencesL0, pointsL0, 0)
-    f_build_points(segmentsL1, centersL1, divergencesL1, pointsL1, 1)
-    f_build_points(segmentsL2, centersL2, divergencesL2, pointsL2, 2)
-    f_build_points(segmentsL3, centersL3, divergencesL3, pointsL3, 3)
-    trendL0 := f_get_trend_state(centersL0, divergencesL0, 0)
-    trendL1 := f_get_trend_state(centersL1, divergencesL1, 1)
-    trendL2 := f_get_trend_state(centersL2, divergencesL2, 2)
-    trendL3 := f_get_trend_state(centersL3, divergencesL3, 3)
+    [currentTrendT0, currentTrendT1, currentTrendT2, currentTrendT3] = f_build_focus_hierarchy(viewStrokes, viewMacdHistValues, viewDifValues, segmentsS, movementsT0, movementsT1, movementsT2, movementsT3, centersT0, centersT1, centersT2, centersT3, divergencesT0, divergencesT1, divergencesT2, divergencesT3, pointsT0, pointsT1, pointsT2, pointsT3)
+    trendT0 := currentTrendT0
+    trendT1 := currentTrendT1
+    trendT2 := currentTrendT2
+    trendT3 := currentTrendT3
+    if na(reliableStartTime) and bar_index >= MACD_WARMUP_BARS and f_has_reliable_confirmed_center(segmentsS, MACD_WARMUP_BARS)
+        reliableStartTime := time
     if referenceEnabled1
         referenceEngine1 := f_build_reference_engine(referenceEngine1)
         referencePreviewEngine1 := f_copy_reference_engine(referenceEngine1)
-        referencePreviewEngine1 := f_ingest_reference(true, referencePreviewTime1, referencePreviewHigh1, referencePreviewLow1, referencePreviewDif1, referencePreviewHist1, time, minimumStrokeDistance, referencePreviewEngine1, false)
+        referencePreviewEngine1 := f_ingest_reference(true, referencePreviewTime1, referencePreviewHigh1, referencePreviewLow1, referencePreviewDif1, referencePreviewHist1, time, referencePreviewEngine1, false)
         referencePreviewEngine1 := f_build_reference_engine(referencePreviewEngine1)
     if referenceEnabled2
         referenceEngine2 := f_build_reference_engine(referenceEngine2)
         referencePreviewEngine2 := f_copy_reference_engine(referenceEngine2)
-        referencePreviewEngine2 := f_ingest_reference(true, referencePreviewTime2, referencePreviewHigh2, referencePreviewLow2, referencePreviewDif2, referencePreviewHist2, time, minimumStrokeDistance, referencePreviewEngine2, false)
+        referencePreviewEngine2 := f_ingest_reference(true, referencePreviewTime2, referencePreviewHigh2, referencePreviewLow2, referencePreviewDif2, referencePreviewHist2, time, referencePreviewEngine2, false)
         referencePreviewEngine2 := f_build_reference_engine(referencePreviewEngine2)
     if referenceEnabled3
         referenceEngine3 := f_build_reference_engine(referenceEngine3)
         referencePreviewEngine3 := f_copy_reference_engine(referenceEngine3)
-        referencePreviewEngine3 := f_ingest_reference(true, referencePreviewTime3, referencePreviewHigh3, referencePreviewLow3, referencePreviewDif3, referencePreviewHist3, time, minimumStrokeDistance, referencePreviewEngine3, false)
+        referencePreviewEngine3 := f_ingest_reference(true, referencePreviewTime3, referencePreviewHigh3, referencePreviewLow3, referencePreviewDif3, referencePreviewHist3, time, referencePreviewEngine3, false)
         referencePreviewEngine3 := f_build_reference_engine(referencePreviewEngine3)
     if referenceEnabled4
         referenceEngine4 := f_build_reference_engine(referenceEngine4)
         referencePreviewEngine4 := f_copy_reference_engine(referenceEngine4)
-        referencePreviewEngine4 := f_ingest_reference(true, referencePreviewTime4, referencePreviewHigh4, referencePreviewLow4, referencePreviewDif4, referencePreviewHist4, time, minimumStrokeDistance, referencePreviewEngine4, false)
+        referencePreviewEngine4 := f_ingest_reference(true, referencePreviewTime4, referencePreviewHigh4, referencePreviewLow4, referencePreviewDif4, referencePreviewHist4, time, referencePreviewEngine4, false)
         referencePreviewEngine4 := f_build_reference_engine(referencePreviewEngine4)
 
-    array.clear(activeEvidence)
-    f_collect_layer_evidence(activeEvidence, 0, timeframe.period, viewStrokes, divergencesL0, pointsL0)
-    f_collect_layer_evidence(activeEvidence, 0, timeframe.period, segmentsL1, divergencesL1, pointsL1)
-    f_collect_layer_evidence(activeEvidence, 0, timeframe.period, segmentsL2, divergencesL2, pointsL2)
-    f_collect_layer_evidence(activeEvidence, 0, timeframe.period, segmentsL3, divergencesL3, pointsL3)
+    array.clear(currentStructureSnapshots)
+    f_collect_focus_snapshots(currentStructureSnapshots, timeframe.period, viewStrokeEndpoints, viewStrokes, segmentsS, movementsT0, movementsT1, movementsT2, movementsT3, centersT0, centersT1, centersT2, centersT3, divergencesT0, divergencesT1, divergencesT2, divergencesT3, pointsT0, pointsT1, pointsT2, pointsT3, noLowerPointSources, trendT0, trendT1, trendT2, trendT3)
     if referenceEnabled1
-        f_collect_layer_evidence(activeEvidence, 1, referenceTimeframe1, referenceEngine1.strokes, referenceEngine1.divergencesL0, referenceEngine1.pointsL0)
-        f_collect_layer_evidence(activeEvidence, 1, referenceTimeframe1, referenceEngine1.segmentsL1, referenceEngine1.divergencesL1, referenceEngine1.pointsL1)
-        f_collect_layer_evidence(activeEvidence, 1, referenceTimeframe1, referenceEngine1.segmentsL2, referenceEngine1.divergencesL2, referenceEngine1.pointsL2)
+        f_collect_reference_snapshots(currentStructureSnapshots, referenceTimeframe1, referenceEngine1)
     if referenceEnabled2
-        f_collect_layer_evidence(activeEvidence, 2, referenceTimeframe2, referenceEngine2.strokes, referenceEngine2.divergencesL0, referenceEngine2.pointsL0)
-        f_collect_layer_evidence(activeEvidence, 2, referenceTimeframe2, referenceEngine2.segmentsL1, referenceEngine2.divergencesL1, referenceEngine2.pointsL1)
-        f_collect_layer_evidence(activeEvidence, 2, referenceTimeframe2, referenceEngine2.segmentsL2, referenceEngine2.divergencesL2, referenceEngine2.pointsL2)
+        f_collect_reference_snapshots(currentStructureSnapshots, referenceTimeframe2, referenceEngine2)
     if referenceEnabled3
-        f_collect_layer_evidence(activeEvidence, 3, referenceTimeframe3, referenceEngine3.strokes, referenceEngine3.divergencesL0, referenceEngine3.pointsL0)
-        f_collect_layer_evidence(activeEvidence, 3, referenceTimeframe3, referenceEngine3.segmentsL1, referenceEngine3.divergencesL1, referenceEngine3.pointsL1)
-        f_collect_layer_evidence(activeEvidence, 3, referenceTimeframe3, referenceEngine3.segmentsL2, referenceEngine3.divergencesL2, referenceEngine3.pointsL2)
+        f_collect_reference_snapshots(currentStructureSnapshots, referenceTimeframe3, referenceEngine3)
     if referenceEnabled4
-        f_collect_layer_evidence(activeEvidence, 4, referenceTimeframe4, referenceEngine4.strokes, referenceEngine4.divergencesL0, referenceEngine4.pointsL0)
-        f_collect_layer_evidence(activeEvidence, 4, referenceTimeframe4, referenceEngine4.segmentsL1, referenceEngine4.divergencesL1, referenceEngine4.pointsL1)
-        f_collect_layer_evidence(activeEvidence, 4, referenceTimeframe4, referenceEngine4.segmentsL2, referenceEngine4.divergencesL2, referenceEngine4.pointsL2)
+        f_collect_reference_snapshots(currentStructureSnapshots, referenceTimeframe4, referenceEngine4)
+    array.clear(activeEvidence)
+    f_collect_layer_evidence(activeEvidence, 0, timeframe.period, segmentsS, divergencesT0, pointsT0)
+    f_collect_layer_evidence(activeEvidence, 0, timeframe.period, movementsT0, divergencesT1, pointsT1)
+    f_collect_layer_evidence(activeEvidence, 0, timeframe.period, movementsT1, divergencesT2, pointsT2)
+    f_collect_layer_evidence(activeEvidence, 0, timeframe.period, movementsT2, divergencesT3, pointsT3)
+    if referenceEnabled1
+        f_collect_layer_evidence(activeEvidence, 1, referenceTimeframe1, referenceEngine1.segmentsS, referenceEngine1.divergencesT0, referenceEngine1.pointsT0)
+        f_collect_layer_evidence(activeEvidence, 1, referenceTimeframe1, referenceEngine1.movementsT0, referenceEngine1.divergencesT1, referenceEngine1.pointsT1)
+        f_collect_layer_evidence(activeEvidence, 1, referenceTimeframe1, referenceEngine1.movementsT1, referenceEngine1.divergencesT2, referenceEngine1.pointsT2)
+    if referenceEnabled2
+        f_collect_layer_evidence(activeEvidence, 2, referenceTimeframe2, referenceEngine2.segmentsS, referenceEngine2.divergencesT0, referenceEngine2.pointsT0)
+        f_collect_layer_evidence(activeEvidence, 2, referenceTimeframe2, referenceEngine2.movementsT0, referenceEngine2.divergencesT1, referenceEngine2.pointsT1)
+        f_collect_layer_evidence(activeEvidence, 2, referenceTimeframe2, referenceEngine2.movementsT1, referenceEngine2.divergencesT2, referenceEngine2.pointsT2)
+    if referenceEnabled3
+        f_collect_layer_evidence(activeEvidence, 3, referenceTimeframe3, referenceEngine3.segmentsS, referenceEngine3.divergencesT0, referenceEngine3.pointsT0)
+        f_collect_layer_evidence(activeEvidence, 3, referenceTimeframe3, referenceEngine3.movementsT0, referenceEngine3.divergencesT1, referenceEngine3.pointsT1)
+        f_collect_layer_evidence(activeEvidence, 3, referenceTimeframe3, referenceEngine3.movementsT1, referenceEngine3.divergencesT2, referenceEngine3.pointsT2)
+    if referenceEnabled4
+        f_collect_layer_evidence(activeEvidence, 4, referenceTimeframe4, referenceEngine4.segmentsS, referenceEngine4.divergencesT0, referenceEngine4.pointsT0)
+        f_collect_layer_evidence(activeEvidence, 4, referenceTimeframe4, referenceEngine4.movementsT0, referenceEngine4.divergencesT1, referenceEngine4.pointsT1)
+        f_collect_layer_evidence(activeEvidence, 4, referenceTimeframe4, referenceEngine4.movementsT1, referenceEngine4.divergencesT2, referenceEngine4.pointsT2)
     f_build_resonances(activeEvidence, activeResonances)
     array.clear(nestingEvidence)
-    f_collect_nesting_evidence(nestingEvidence, timeframe.period, viewStrokes, divergencesL0)
-    f_collect_nesting_evidence(nestingEvidence, timeframe.period, segmentsL1, divergencesL1)
-    f_collect_nesting_evidence(nestingEvidence, timeframe.period, segmentsL2, divergencesL2)
-    f_collect_nesting_evidence(nestingEvidence, timeframe.period, segmentsL3, divergencesL3)
+    f_collect_nesting_evidence(nestingEvidence, timeframe.period, segmentsS, divergencesT0)
+    f_collect_nesting_evidence(nestingEvidence, timeframe.period, movementsT0, divergencesT1)
+    f_collect_nesting_evidence(nestingEvidence, timeframe.period, movementsT1, divergencesT2)
+    f_collect_nesting_evidence(nestingEvidence, timeframe.period, movementsT2, divergencesT3)
     nestingState := f_build_nesting(nestingEvidence)
-    if array.size(centersL3) > 0
-        f_build_scenarios(segmentsL3, centersL3, trendL3, 3, activeScenarios)
-    else if array.size(centersL2) > 0
-        f_build_scenarios(segmentsL2, centersL2, trendL2, 2, activeScenarios)
-    else if array.size(centersL1) > 0
-        f_build_scenarios(segmentsL1, centersL1, trendL1, 1, activeScenarios)
+    if array.size(centersT3) > 0
+        f_build_scenarios(movementsT2, centersT3, trendT3, 3, activeScenarios)
+    else if array.size(centersT2) > 0
+        f_build_scenarios(movementsT1, centersT2, trendT2, 2, activeScenarios)
+    else if array.size(centersT1) > 0
+        f_build_scenarios(movementsT0, centersT1, trendT1, 1, activeScenarios)
     else
-        f_build_scenarios(viewStrokes, centersL0, trendL0, 0, activeScenarios)
+        f_build_scenarios(segmentsS, centersT0, trendT0, 0, activeScenarios)
 
 if barstate.islast and barstate.isrealtime and standardChart
     int evidenceCountForAlerts = array.size(activeEvidence)
@@ -1934,7 +2474,7 @@ if barstate.islast and barstate.isrealtime and standardChart
                 if scenario.knownTime >= time
                     string scenarioEvidence = "trigger=" + scenario.triggerText + ";invalidation=" + scenario.invalidationText + ";layout_only=true"
                     string scenarioMessage = "走势终完美候选分支：" + scenario.name + "。不表示目标价、时间或概率"
-                    string movementContext = f_movement_context_id(timeframe.period, scenario.layer, scenario.sourceIndex, scenario.sourceTime)
+                    string movementContext = f_movement_context_id(timeframe.period, scenario.layer, scenario.sourceTime)
                     string payload = f_json_payload(scenario.eventId, timeframe.period, scenario.layer, movementContext, scenario.direction, "scenario", "candidate", scenario.sourceTime, scenario.anchorPrice, na, na, na, scenarioEvidence, scenarioMessage)
                     f_emit_once(emittedEventIds, f_event_status_key(scenario.eventId, false), payload)
 
@@ -1963,7 +2503,7 @@ f_center_summary(array<Center> centers) =>
         Center latest = array.get(centers, count - 1)
         string state = not latest.confirmed ? "核心候选" : latest.leaveState == 2 ? "离开确认" : latest.leaveState == 1 ? "离开候选" : latest.failedDeparture ? "延伸·离开失败" : "延伸"
         string lifecycle = latest.confirmed and not latest.stateConfirmed ? "·状态候选" : ""
-        string expansion = latest.expansionConfirmed ? "·已升级L" + str.tostring(latest.layer + 1) : latest.expansionCandidate ? "·扩展候选" : ""
+        string expansion = latest.expansionConfirmed ? "·已升级T" + str.tostring(latest.layer + 1) : latest.expansionCandidate ? "·扩展候选" : ""
         result := str.tostring(count) + "·" + state + lifecycle + expansion
     result
 
@@ -1972,9 +2512,9 @@ f_trend_summary(TrendState state) =>
     if not na(state) and state.kind > 0
         string kind = state.kind == 2 ? "趋势" : "盘整"
         string direction = state.direction == 1 ? "上" : state.direction == -1 ? "下" : "待定"
-        string status = state.confirmed ? "确认" : "候选"
-        string completion = state.completionCandidate ? "·完成候选" : ""
-        result := kind + direction + "·" + str.tostring(state.centerCount) + "枢·" + status + completion
+        string status = state.status == MOVEMENT_COMPLETED ? "已完成" : state.status == MOVEMENT_COMPLETION_CANDIDATE ? "完成候选" : state.status == MOVEMENT_QUALIFIED ? "已具备" : "形成中"
+        string proof = state.status == MOVEMENT_COMPLETED and state.completionProof == MOVEMENT_COMPLETED_BY_PROMOTION ? "·升级确认" : state.status == MOVEMENT_COMPLETED ? "·反向确认" : ""
+        result := kind + direction + "·" + str.tostring(state.centerCount) + "枢·" + status + proof
     result
 
 f_divergence_summary(array<Divergence> divergences) =>
@@ -2021,10 +2561,10 @@ f_point_triplet(array<BuySellPoint> points) =>
 f_reference_summary(bool requested, bool enabled, string referenceTimeframe, ReferenceEngine engine, ReferenceEngine previewEngine) =>
     string result = requested ? (standardChart ? "不可用/截断" : "合成图表暂停") : "关闭"
     if enabled
-        string unitCounts = str.tostring(array.size(engine.strokes)) + "/" + str.tostring(array.size(engine.segmentsL1)) + "/" + str.tostring(array.size(engine.segmentsL2))
-        string pointCounts = f_point_triplet(engine.pointsL0) + "|" + f_point_triplet(engine.pointsL1) + "|" + f_point_triplet(engine.pointsL2)
-        string previewCounts = str.tostring(array.size(previewEngine.strokes)) + "/" + str.tostring(array.size(previewEngine.segmentsL1)) + "/" + str.tostring(array.size(previewEngine.segmentsL2))
-        result := referenceTimeframe + "·确K" + str.tostring(engine.state.nextIndex) + "·U" + unitCounts + "·P" + pointCounts + "·预U" + previewCounts
+        string unitCounts = str.tostring(array.size(engine.strokes)) + "/" + str.tostring(array.size(engine.segmentsS)) + "/" + str.tostring(array.size(engine.movementsT0))
+        string pointCounts = f_point_triplet(engine.pointsT0) + "|" + f_point_triplet(engine.pointsT1) + "|" + f_point_triplet(engine.pointsT2)
+        string previewCounts = str.tostring(array.size(previewEngine.strokes)) + "/" + str.tostring(array.size(previewEngine.segmentsS)) + "/" + str.tostring(array.size(previewEngine.movementsT0))
+        result := referenceTimeframe + "·确K" + str.tostring(engine.state.nextIndex) + "·B/S/T0=" + unitCounts + "·P=" + pointCounts + "·预B/S/T0=" + previewCounts
     result
 
 f_evidence_summary(array<Evidence> ledger) =>
@@ -2080,7 +2620,7 @@ f_nesting_summary(NestingState nesting) =>
         string sideText = nesting.direction == 1 ? "买" : "卖"
         string statusText = nesting.confirmed ? "确" : "候"
         string partialText = nesting.partial ? "部分" : "完整"
-        result := partialText + "·" + sideText + statusText + "·L" + str.tostring(nesting.rootLayer) + "×" + str.tostring(nesting.depth)
+        result := partialText + "·" + sideText + statusText + "·T" + str.tostring(nesting.rootLayer) + "×" + str.tostring(nesting.depth)
     result
 
 f_nesting_tooltip(NestingState nesting) =>
@@ -2120,7 +2660,7 @@ f_trade_signal_summary(array<Evidence> ledger) =>
             bool later = not na(evidence.knownTime) and (na(latestKnownTime) or evidence.knownTime > latestKnownTime or (evidence.knownTime == latestKnownTime and priority > latestPriority))
             if later
                 string kindText = evidence.kind == 1 ? "盘背" : evidence.kind == 2 ? "趋背" : evidence.kind == 11 ? "1类" : evidence.kind == 12 ? "2类" : "3类"
-                result := kindText + (evidence.direction == 1 ? "买" : "卖") + "·" + evidence.marketTimeframe + "·L" + str.tostring(evidence.layer) + "·" + (evidence.confirmed ? "确认" : "候选")
+                result := kindText + (evidence.direction == 1 ? "买" : "卖") + "·" + evidence.marketTimeframe + "·T" + str.tostring(evidence.layer) + "·" + (evidence.confirmed ? "确认" : "候选")
                 resultDirection := evidence.direction
                 resultConfirmed := evidence.confirmed
                 latestKnownTime := evidence.knownTime
@@ -2144,8 +2684,8 @@ f_draw_centers(array<Center> centers, array<box> boxes, array<label> labels, col
                     box waveBox = box.new(left = drawLeft, top = current.gg, right = current.endIndex, bottom = current.dd, xloc = xloc.bar_index, border_color = color.new(centerColor, 45), border_width = 1, border_style = line.style_dotted, bgcolor = color.new(centerColor, 100))
                     array.push(boxes, waveBox)
                 string stateText = current.expansionConfirmed ? "升确" : current.leaveState == 2 ? "离确" : current.leaveState == 1 ? "离候" : current.failedDeparture ? "离败" : visualConfirmed ? "延" : "延候"
-                string centerText = "Z·L" + str.tostring(current.layer) + "·" + stateText
-                string promotionText = current.expansionConfirmed ? "\n高级中枢: L" + str.tostring(current.layer + 1) + " #" + str.tostring(current.parentCenter) + "\n三段来源: " + str.tostring(current.promotionSourceFirst) + "/" + str.tostring(current.promotionSourceSecond) + "/" + str.tostring(current.promotionSourceThird) : current.expansionCandidate ? "\n高级中枢: 仅扩展候选，等待三段确认来源" : ""
+                string centerText = "Z·T" + str.tostring(current.layer) + "·" + stateText
+                string promotionText = current.expansionConfirmed ? "\n高级中枢: T" + str.tostring(current.layer + 1) + " #" + str.tostring(current.parentCenter) + "\n三走势来源: " + str.tostring(current.promotionSourceFirst) + "/" + str.tostring(current.promotionSourceSecond) + "/" + str.tostring(current.promotionSourceThird) : current.expansionCandidate ? "\n高级中枢: 仅扩展候选，等待三走势确认来源" : ""
                 string centerTooltip = "中枢核心 ZD/ZG: " + str.tostring(current.zd, format.mintick) + " / " + str.tostring(current.zg, format.mintick) + "\n波动 DD/GG: " + str.tostring(current.dd, format.mintick) + " / " + str.tostring(current.gg, format.mintick) + "\n来源单元: " + str.tostring(current.startChild) + ".." + str.tostring(current.endChild) + promotionText
                 if array.size(labels) < 480
                     label centerLabel = label.new(current.endIndex, current.zg, centerText, xloc = xloc.bar_index, style = label.style_label_left, color = color.new(centerColor, 74), textcolor = foregroundColor, size = size.tiny, tooltip = centerTooltip)
@@ -2165,7 +2705,7 @@ f_draw_divergences(array<Divergence> divergences, array<label> labels, color lay
                 color divergenceColor = current.confirmed ? layerColor : candidateColor
                 string kindText = current.kind == 2 ? "趋背" : "盘背"
                 string stateText = current.confirmed ? "确" : "候"
-                string divergenceText = compactTrading ? kindText + (current.direction == 1 ? "卖" : "买") + "·L" + str.tostring(current.layer) : kindText + "·L" + str.tostring(current.layer) + "·" + stateText
+                string divergenceText = compactTrading ? kindText + (current.direction == 1 ? "卖" : "买") + "·T" + str.tostring(current.layer) : kindText + "·T" + str.tostring(current.layer) + "·" + stateText
                 string difText = current.difWeaker ? "减弱" : "未减弱"
                 string divergenceTooltip = "MACD 同向面积: " + str.tostring(current.enteringArea, "#.####") + " -> " + str.tostring(current.leavingArea, "#.####") + "\n面积比: " + str.tostring(current.areaRatio, "#.###") + "\nDIF 极值: " + difText + "\n结构时间: " + str.format_time(current.structureTime, "yyyy-MM-dd HH:mm") + (current.confirmed ? "\n确认时间: " + str.format_time(current.confirmationTime, "yyyy-MM-dd HH:mm") : "")
                 string divergenceStyle = current.direction == 1 ? label.style_label_down : label.style_label_up
@@ -2190,7 +2730,7 @@ f_draw_points(array<BuySellPoint> points, array<line> lines, array<label> labels
                 if labelVisible
                     color pointColor = not current.confirmed ? candidateColor : current.valid ? identityColor : color.gray
                     string sideText = current.direction == 1 ? "B" : "S"
-                    string pointText = compactTrading ? str.tostring(current.pointClass) + (current.direction == 1 ? "买" : "卖") + "·L" + str.tostring(current.layer) : str.tostring(current.pointClass) + sideText + "·L" + str.tostring(current.layer)
+                    string pointText = compactTrading ? str.tostring(current.pointClass) + (current.direction == 1 ? "买" : "卖") + "·T" + str.tostring(current.layer) : str.tostring(current.pointClass) + sideText + "·T" + str.tostring(current.layer)
                     string pointStatus = not current.confirmed ? "候选" : current.valid ? (current.invalidationCandidate ? "失效候选" : "有效") : "已失效"
                     string delayText = na(current.confirmationDelayBars) ? "待确认" : str.tostring(current.confirmationDelayBars) + " K"
                     string pointTooltip = "身份: " + str.tostring(current.pointClass) + " 类" + (current.direction == 1 ? "买点" : "卖点") + "\n状态: " + pointStatus + "\n结构价: " + str.tostring(current.structurePrice, format.mintick) + "\n结构时间: " + str.format_time(current.structureTime, "yyyy-MM-dd HH:mm") + (current.confirmed ? "\n确认价: " + str.tostring(current.confirmationPrice, format.mintick) + "\n确认时间: " + str.format_time(current.confirmationTime, "yyyy-MM-dd HH:mm") + "\n确认延迟: " + delayText : "") + "\n失效边界: " + str.tostring(current.invalidationPrice, format.mintick)
@@ -2216,7 +2756,7 @@ f_draw_scenarios(array<Scenario> scenarios, array<line> lines, array<label> labe
             bool lineBudgetAvailable = array.size(lines) <= 488
             line routeLine = lineBudgetAvailable ? line.new(bar_index, scenario.anchorPrice, bendIndex, scenario.triggerPrice, xloc = xloc.bar_index, color = color.new(scenarioColor, 28), style = line.style_dashed, width = 1) : na
             line conditionLine = lineBudgetAvailable ? line.new(bendIndex, scenario.triggerPrice, endIndex, scenario.triggerPrice, xloc = xloc.bar_index, color = color.new(scenarioColor, 45), style = line.style_dotted, width = 1) : na
-            string scenarioText = "S" + str.tostring(scenarioIndex + 1) + "·" + scenario.name + "·L" + str.tostring(scenario.layer)
+            string scenarioText = "P" + str.tostring(scenarioIndex + 1) + "·" + scenario.name + "·T" + str.tostring(scenario.layer)
             string scenarioTooltip = "候选情景，不是预测\n触发: " + scenario.triggerText + "\n失效: " + scenario.invalidationText + "\n锚点: " + str.tostring(scenario.triggerPrice, format.mintick) + "\n横向长度仅用于排版，不表示时间或概率"
             label scenarioLabel = array.size(labels) < 480 ? label.new(endIndex, scenario.triggerPrice, scenarioText, xloc = xloc.bar_index, style = label.style_label_left, color = color.new(scenarioColor, 48), textcolor = foregroundColor, size = size.tiny, tooltip = scenarioTooltip) : na
             if not na(routeLine)
@@ -2230,7 +2770,7 @@ var array<label> structureLabels = array.new<label>()
 var array<box> structureBoxes = array.new<box>()
 bool tradingView = viewPreset == "交易"
 int pointRenderBudget = tradingView ? 220 : viewPreset == "简洁" ? 120 : viewPreset == "标准" ? 300 : 260
-int totalPointHistory = array.size(pointsL0) + array.size(pointsL1) + array.size(pointsL2) + array.size(pointsL3)
+int totalPointHistory = array.size(pointsT0) + array.size(pointsT1) + array.size(pointsT2) + array.size(pointsT3)
 bool pointHistoryClipped = (showBuySellPoints or showEvidenceRanges) and totalPointHistory > pointRenderBudget
 
 if barstate.islast
@@ -2262,12 +2802,12 @@ if barstate.islast
                 line strokeLine = line.new(stroke.startTime, stroke.startPrice, stroke.endTime, stroke.endPrice, xloc = xloc.bar_time, color = strokeColor, style = strokeStyle, width = stroke.confirmed ? 2 : 1)
                 array.push(structureLines, strokeLine)
 
-    int l1CountForDraw = array.size(segmentsL1)
+    int l1CountForDraw = array.size(segmentsS)
     if showSegments and l1CountForDraw > 0
         int l1DrawBudget = tradingView ? 18 : viewPreset == "简洁" ? 25 : viewPreset == "标准" ? 55 : 70
         int firstL1ToDraw = math.max(0, l1CountForDraw - l1DrawBudget)
         for i = firstL1ToDraw to l1CountForDraw - 1
-            Unit segment = array.get(segmentsL1, i)
+            Unit segment = array.get(segmentsS, i)
             if segment.endIndex >= bar_index - detailBars and (segment.confirmed or showCandidates)
                 color segmentColor = segment.confirmed ? layer1Color : candidateColor
                 string segmentStyle = segment.confirmed ? line.style_solid : line.style_dashed
@@ -2275,19 +2815,19 @@ if barstate.islast
                 array.push(structureLines, segmentLine)
 
     if showHigherSegments and (viewPreset == "研究" or tradingView)
-        int l2CountForDraw = array.size(segmentsL2)
+        int l2CountForDraw = array.size(movementsT0)
         if l2CountForDraw > 0
             int firstL2ToDraw = math.max(0, l2CountForDraw - (tradingView ? 6 : 24))
             for i = firstL2ToDraw to l2CountForDraw - 1
-                Unit segment = array.get(segmentsL2, i)
+                Unit segment = array.get(movementsT0, i)
                 if segment.endIndex >= bar_index - detailBars and (segment.confirmed or showCandidates)
                     line segmentLine = line.new(segment.startTime, segment.startPrice, segment.endTime, segment.endPrice, xloc = xloc.bar_time, color = segment.confirmed ? layer2Color : candidateColor, style = segment.confirmed ? line.style_solid : line.style_dashed, width = 4)
                     array.push(structureLines, segmentLine)
-        int l3CountForDraw = array.size(segmentsL3)
+        int l3CountForDraw = array.size(movementsT1)
         if not tradingView and l3CountForDraw > 0
             int firstL3ToDraw = math.max(0, l3CountForDraw - 8)
             for i = firstL3ToDraw to l3CountForDraw - 1
-                Unit segment = array.get(segmentsL3, i)
+                Unit segment = array.get(movementsT1, i)
                 if segment.endIndex >= bar_index - detailBars and (segment.confirmed or showCandidates)
                     line segmentLine = line.new(segment.startTime, segment.startPrice, segment.endTime, segment.endPrice, xloc = xloc.bar_time, color = segment.confirmed ? layer3Color : candidateColor, style = segment.confirmed ? line.style_solid : line.style_dashed, width = 5)
                     array.push(structureLines, segmentLine)
@@ -2307,22 +2847,22 @@ if barstate.islast
     int l2CenterDraw = not showCenters ? 0 : tradingView ? 1 : viewPreset == "简洁" ? 1 : viewPreset == "标准" ? 4 : 8
     int l3CenterDraw = not showCenters ? 0 : tradingView ? 0 : viewPreset == "简洁" ? 1 : viewPreset == "标准" ? 2 : 4
     bool showWaveCenters = viewPreset == "研究"
-    f_draw_centers(centersL0, structureBoxes, structureLabels, foregroundColor, l0CenterDraw, detailBars, showWaveCenters)
-    f_draw_centers(centersL1, structureBoxes, structureLabels, layer1Color, l1CenterDraw, detailBars, showWaveCenters)
-    f_draw_centers(centersL2, structureBoxes, structureLabels, layer2Color, l2CenterDraw, detailBars, showWaveCenters)
-    f_draw_centers(centersL3, structureBoxes, structureLabels, layer3Color, l3CenterDraw, detailBars, showWaveCenters)
+    f_draw_centers(centersT0, structureBoxes, structureLabels, foregroundColor, l0CenterDraw, detailBars, showWaveCenters)
+    f_draw_centers(centersT1, structureBoxes, structureLabels, layer1Color, l1CenterDraw, detailBars, showWaveCenters)
+    f_draw_centers(centersT2, structureBoxes, structureLabels, layer2Color, l2CenterDraw, detailBars, showWaveCenters)
+    f_draw_centers(centersT3, structureBoxes, structureLabels, layer3Color, l3CenterDraw, detailBars, showWaveCenters)
 
     int divergenceDraw = not showDivergences ? 0 : tradingView ? 4 : viewPreset == "简洁" ? 1 : viewPreset == "标准" ? 10 : 12
-    f_draw_divergences(divergencesL0, structureLabels, foregroundColor, divergenceDraw, detailBars, tradingView, tradingView)
-    f_draw_divergences(divergencesL1, structureLabels, layer1Color, divergenceDraw, detailBars, tradingView, tradingView)
-    f_draw_divergences(divergencesL2, structureLabels, layer2Color, divergenceDraw, detailBars, tradingView, tradingView)
-    f_draw_divergences(divergencesL3, structureLabels, layer3Color, divergenceDraw, detailBars, tradingView, tradingView)
+    f_draw_divergences(divergencesT0, structureLabels, foregroundColor, divergenceDraw, detailBars, tradingView, tradingView)
+    f_draw_divergences(divergencesT1, structureLabels, layer1Color, divergenceDraw, detailBars, tradingView, tradingView)
+    f_draw_divergences(divergencesT2, structureLabels, layer2Color, divergenceDraw, detailBars, tradingView, tradingView)
+    f_draw_divergences(divergencesT3, structureLabels, layer3Color, divergenceDraw, detailBars, tradingView, tradingView)
 
     int remainingPointBudget = (showBuySellPoints or showEvidenceRanges) ? pointRenderBudget : 0
-    remainingPointBudget -= f_draw_points(pointsL3, structureLines, structureLabels, remainingPointBudget, detailBars, tradingView, showBuySellPoints, showEvidenceRanges, tradingView)
-    remainingPointBudget -= f_draw_points(pointsL2, structureLines, structureLabels, remainingPointBudget, detailBars, tradingView, showBuySellPoints, showEvidenceRanges, tradingView)
-    remainingPointBudget -= f_draw_points(pointsL1, structureLines, structureLabels, remainingPointBudget, detailBars, tradingView, showBuySellPoints, showEvidenceRanges, tradingView)
-    remainingPointBudget -= f_draw_points(pointsL0, structureLines, structureLabels, remainingPointBudget, detailBars, tradingView, showBuySellPoints, showEvidenceRanges, tradingView)
+    remainingPointBudget -= f_draw_points(pointsT3, structureLines, structureLabels, remainingPointBudget, detailBars, tradingView, showBuySellPoints, showEvidenceRanges, tradingView)
+    remainingPointBudget -= f_draw_points(pointsT2, structureLines, structureLabels, remainingPointBudget, detailBars, tradingView, showBuySellPoints, showEvidenceRanges, tradingView)
+    remainingPointBudget -= f_draw_points(pointsT1, structureLines, structureLabels, remainingPointBudget, detailBars, tradingView, showBuySellPoints, showEvidenceRanges, tradingView)
+    remainingPointBudget -= f_draw_points(pointsT0, structureLines, structureLabels, remainingPointBudget, detailBars, tradingView, showBuySellPoints, showEvidenceRanges, tradingView)
     f_draw_scenarios(activeScenarios, structureLines, structureLabels)
 
 f_panel_cell(table panel, int column, int row, string cellText, color text_color, color bgcolor = na, string tooltip = "") =>
@@ -2337,70 +2877,70 @@ if barstate.islast
     f_panel_cell(statusPanel, 1, 1, timeframe.period, text_color = foregroundColor)
     f_panel_cell(statusPanel, 0, 2, "图表", text_color = foregroundColor)
     f_panel_cell(statusPanel, 1, 2, standardChart ? "标准 K 线" : "不支持的合成图表", text_color = standardChart ? foregroundColor : warningColor)
-    f_panel_cell(statusPanel, 0, 3, "笔口径", text_color = foregroundColor)
-    f_panel_cell(statusPanel, 1, 3, strokeMode, text_color = foregroundColor)
+    f_panel_cell(statusPanel, 0, 3, "理论版本", text_color = foregroundColor)
+    f_panel_cell(statusPanel, 1, 3, THEORY_VERSION, text_color = foregroundColor)
     f_panel_cell(statusPanel, 0, 4, "预热", text_color = foregroundColor)
     f_panel_cell(statusPanel, 1, 4, warmedUp ? "完成" : str.tostring(bar_index + 1) + "/" + str.tostring(warmupBars), text_color = warmedUp ? foregroundColor : warningColor)
     f_panel_cell(statusPanel, 0, 5, "合成 K 线", text_color = foregroundColor)
     f_panel_cell(statusPanel, 1, 5, str.tostring(array.size(syntheticBars)), text_color = foregroundColor)
     f_panel_cell(statusPanel, 0, 6, "基础分型", text_color = foregroundColor)
     f_panel_cell(statusPanel, 1, 6, str.tostring(array.size(baseFractals)), text_color = foregroundColor)
-    f_panel_cell(statusPanel, 0, 7, "L0 笔", text_color = foregroundColor)
+    f_panel_cell(statusPanel, 0, 7, "B 笔", text_color = foregroundColor)
     f_panel_cell(statusPanel, 1, 7, str.tostring(array.size(viewStrokes)), text_color = foregroundColor)
     f_panel_cell(statusPanel, 0, 8, "确认 / 候选", text_color = foregroundColor)
     int totalStrokes = array.size(viewStrokes)
     int confirmedStrokes = totalStrokes > 0 and not array.get(viewStrokes, totalStrokes - 1).confirmed ? totalStrokes - 1 : totalStrokes
     f_panel_cell(statusPanel, 1, 8, str.tostring(math.max(0, confirmedStrokes)) + " / " + str.tostring(totalStrokes - math.max(0, confirmedStrokes)), text_color = foregroundColor)
-    f_panel_cell(statusPanel, 0, 9, "L1 线段", text_color = foregroundColor)
-    int totalL1 = array.size(segmentsL1)
-    int confirmedL1 = totalL1 > 0 and not array.get(segmentsL1, totalL1 - 1).confirmed ? totalL1 - 1 : totalL1
+    f_panel_cell(statusPanel, 0, 9, "S 线段", text_color = foregroundColor)
+    int totalL1 = array.size(segmentsS)
+    int confirmedL1 = totalL1 > 0 and not array.get(segmentsS, totalL1 - 1).confirmed ? totalL1 - 1 : totalL1
     f_panel_cell(statusPanel, 1, 9, str.tostring(math.max(0, confirmedL1)) + " / " + str.tostring(totalL1 - math.max(0, confirmedL1)), text_color = layer1Color)
-    f_panel_cell(statusPanel, 0, 10, "L2 高阶段", text_color = foregroundColor)
-    int totalL2 = array.size(segmentsL2)
-    int confirmedL2 = totalL2 > 0 and not array.get(segmentsL2, totalL2 - 1).confirmed ? totalL2 - 1 : totalL2
+    f_panel_cell(statusPanel, 0, 10, "T0 完成走势", text_color = foregroundColor)
+    int totalL2 = array.size(movementsT0)
+    int confirmedL2 = totalL2 > 0 and not array.get(movementsT0, totalL2 - 1).confirmed ? totalL2 - 1 : totalL2
     f_panel_cell(statusPanel, 1, 10, str.tostring(math.max(0, confirmedL2)) + " / " + str.tostring(totalL2 - math.max(0, confirmedL2)), text_color = layer2Color)
-    f_panel_cell(statusPanel, 0, 11, "L3 高阶段", text_color = foregroundColor)
-    int totalL3 = array.size(segmentsL3)
-    int confirmedL3 = totalL3 > 0 and not array.get(segmentsL3, totalL3 - 1).confirmed ? totalL3 - 1 : totalL3
+    f_panel_cell(statusPanel, 0, 11, "T1 完成走势", text_color = foregroundColor)
+    int totalL3 = array.size(movementsT1)
+    int confirmedL3 = totalL3 > 0 and not array.get(movementsT1, totalL3 - 1).confirmed ? totalL3 - 1 : totalL3
     f_panel_cell(statusPanel, 1, 11, str.tostring(math.max(0, confirmedL3)) + " / " + str.tostring(totalL3 - math.max(0, confirmedL3)), text_color = layer3Color)
-    f_panel_cell(statusPanel, 0, 12, "最高有效层", text_color = foregroundColor)
-    string highestLayer = totalL3 > 0 ? "L3" : totalL2 > 0 ? "L2" : totalL1 > 0 ? "L1" : "L0"
+    f_panel_cell(statusPanel, 0, 12, "最高有效级别", text_color = foregroundColor)
+    string highestLayer = array.size(centersT3) > 0 ? "T3" : array.size(centersT2) > 0 ? "T2" : array.size(centersT1) > 0 ? "T1" : array.size(centersT0) > 0 ? "T0" : totalL1 > 0 ? "S" : totalStrokes > 0 ? "B" : "K"
     f_panel_cell(statusPanel, 1, 12, highestLayer, text_color = foregroundColor)
-    f_panel_cell(statusPanel, 0, 13, "L0 中枢", text_color = foregroundColor)
-    f_panel_cell(statusPanel, 1, 13, f_center_summary(centersL0), text_color = foregroundColor)
-    f_panel_cell(statusPanel, 0, 14, "L1 中枢", text_color = foregroundColor)
-    f_panel_cell(statusPanel, 1, 14, f_center_summary(centersL1), text_color = layer1Color)
-    f_panel_cell(statusPanel, 0, 15, "L2 中枢", text_color = foregroundColor)
-    f_panel_cell(statusPanel, 1, 15, f_center_summary(centersL2), text_color = layer2Color)
-    f_panel_cell(statusPanel, 0, 16, "L3 中枢", text_color = foregroundColor)
-    f_panel_cell(statusPanel, 1, 16, f_center_summary(centersL3), text_color = layer3Color)
-    f_panel_cell(statusPanel, 0, 17, "L0 走势", text_color = foregroundColor)
-    f_panel_cell(statusPanel, 1, 17, f_trend_summary(trendL0), text_color = foregroundColor)
-    f_panel_cell(statusPanel, 0, 18, "L1 走势", text_color = foregroundColor)
-    f_panel_cell(statusPanel, 1, 18, f_trend_summary(trendL1), text_color = layer1Color)
-    f_panel_cell(statusPanel, 0, 19, "L2 走势", text_color = foregroundColor)
-    f_panel_cell(statusPanel, 1, 19, f_trend_summary(trendL2), text_color = layer2Color)
-    f_panel_cell(statusPanel, 0, 20, "L3 走势", text_color = foregroundColor)
-    f_panel_cell(statusPanel, 1, 20, f_trend_summary(trendL3), text_color = layer3Color)
-    f_panel_cell(statusPanel, 0, 21, "L0 背驰", text_color = foregroundColor)
-    f_panel_cell(statusPanel, 1, 21, f_divergence_summary(divergencesL0), text_color = foregroundColor)
-    f_panel_cell(statusPanel, 0, 22, "L1 背驰", text_color = foregroundColor)
-    f_panel_cell(statusPanel, 1, 22, f_divergence_summary(divergencesL1), text_color = layer1Color)
-    f_panel_cell(statusPanel, 0, 23, "L2 背驰", text_color = foregroundColor)
-    f_panel_cell(statusPanel, 1, 23, f_divergence_summary(divergencesL2), text_color = layer2Color)
-    f_panel_cell(statusPanel, 0, 24, "L3 背驰", text_color = foregroundColor)
-    f_panel_cell(statusPanel, 1, 24, f_divergence_summary(divergencesL3), text_color = layer3Color)
-    f_panel_cell(statusPanel, 0, 25, "L0 买卖点", text_color = foregroundColor)
-    f_panel_cell(statusPanel, 1, 25, f_point_summary(pointsL0), text_color = foregroundColor)
-    f_panel_cell(statusPanel, 0, 26, "L1/L2/L3 点 1/2/3", text_color = foregroundColor)
-    f_panel_cell(statusPanel, 1, 26, f_point_triplet(pointsL1) + " | " + f_point_triplet(pointsL2) + " | " + f_point_triplet(pointsL3), text_color = layer1Color)
+    f_panel_cell(statusPanel, 0, 13, "T0 中枢", text_color = foregroundColor)
+    f_panel_cell(statusPanel, 1, 13, f_center_summary(centersT0), text_color = foregroundColor)
+    f_panel_cell(statusPanel, 0, 14, "T1 中枢", text_color = foregroundColor)
+    f_panel_cell(statusPanel, 1, 14, f_center_summary(centersT1), text_color = layer1Color)
+    f_panel_cell(statusPanel, 0, 15, "T2 中枢", text_color = foregroundColor)
+    f_panel_cell(statusPanel, 1, 15, f_center_summary(centersT2), text_color = layer2Color)
+    f_panel_cell(statusPanel, 0, 16, "T3 中枢", text_color = foregroundColor)
+    f_panel_cell(statusPanel, 1, 16, f_center_summary(centersT3), text_color = layer3Color)
+    f_panel_cell(statusPanel, 0, 17, "T0 走势", text_color = foregroundColor)
+    f_panel_cell(statusPanel, 1, 17, f_trend_summary(trendT0), text_color = foregroundColor)
+    f_panel_cell(statusPanel, 0, 18, "T1 走势", text_color = foregroundColor)
+    f_panel_cell(statusPanel, 1, 18, f_trend_summary(trendT1), text_color = layer1Color)
+    f_panel_cell(statusPanel, 0, 19, "T2 走势", text_color = foregroundColor)
+    f_panel_cell(statusPanel, 1, 19, f_trend_summary(trendT2), text_color = layer2Color)
+    f_panel_cell(statusPanel, 0, 20, "T3 走势", text_color = foregroundColor)
+    f_panel_cell(statusPanel, 1, 20, f_trend_summary(trendT3), text_color = layer3Color)
+    f_panel_cell(statusPanel, 0, 21, "T0 背驰", text_color = foregroundColor)
+    f_panel_cell(statusPanel, 1, 21, f_divergence_summary(divergencesT0), text_color = foregroundColor)
+    f_panel_cell(statusPanel, 0, 22, "T1 背驰", text_color = foregroundColor)
+    f_panel_cell(statusPanel, 1, 22, f_divergence_summary(divergencesT1), text_color = layer1Color)
+    f_panel_cell(statusPanel, 0, 23, "T2 背驰", text_color = foregroundColor)
+    f_panel_cell(statusPanel, 1, 23, f_divergence_summary(divergencesT2), text_color = layer2Color)
+    f_panel_cell(statusPanel, 0, 24, "T3 背驰", text_color = foregroundColor)
+    f_panel_cell(statusPanel, 1, 24, f_divergence_summary(divergencesT3), text_color = layer3Color)
+    f_panel_cell(statusPanel, 0, 25, "T0 买卖点", text_color = foregroundColor)
+    f_panel_cell(statusPanel, 1, 25, f_point_summary(pointsT0), text_color = foregroundColor)
+    f_panel_cell(statusPanel, 0, 26, "T1/T2/T3 点 1/2/3", text_color = foregroundColor)
+    f_panel_cell(statusPanel, 1, 26, f_point_triplet(pointsT1) + " | " + f_point_triplet(pointsT2) + " | " + f_point_triplet(pointsT3), text_color = layer1Color)
     f_panel_cell(statusPanel, 0, 27, "参考/窗口/递归", text_color = foregroundColor)
-    f_panel_cell(statusPanel, 1, 27, str.tostring(activeReferenceCount) + "/4 · " + str.tostring(detailBars) + " K · L0-L3", text_color = foregroundColor)
+    f_panel_cell(statusPanel, 1, 27, str.tostring(activeReferenceCount) + "/4 · " + str.tostring(detailBars) + " K · T0-T3", text_color = foregroundColor)
     f_panel_cell(statusPanel, 0, 28, "对象 线/框/标", text_color = foregroundColor)
     f_panel_cell(statusPanel, 1, 28, str.tostring(array.size(structureLines)) + "/" + str.tostring(array.size(structureBoxes)) + "/" + str.tostring(array.size(structureLabels)), text_color = foregroundColor)
-    f_panel_cell(statusPanel, 0, 29, "状态", text_color = foregroundColor)
+    f_panel_cell(statusPanel, 0, 29, "活动结构 / 历史事件", text_color = foregroundColor)
     string engineStatus = not standardChart ? "确认/参考均已停止" : barstate.isconfirmed ? "收盘确认状态" : "活动K候选预览·确认冻结"
-    f_panel_cell(statusPanel, 1, 29, engineStatus, text_color = standardChart ? foregroundColor : warningColor)
+    f_panel_cell(statusPanel, 1, 29, str.tostring(array.size(currentStructureSnapshots)) + " / " + str.tostring(array.size(lifecycleEvents)) + " · " + engineStatus, text_color = standardChart ? foregroundColor : warningColor)
     f_panel_cell(statusPanel, 0, 30, "参考 1", text_color = foregroundColor)
     f_panel_cell(statusPanel, 1, 30, f_reference_summary(referenceRequested1, referenceEnabled1, referenceTimeframe1, referenceEngine1, referencePreviewEngine1), text_color = layer1Color)
     f_panel_cell(statusPanel, 0, 31, "参考 2", text_color = foregroundColor)
@@ -2431,7 +2971,7 @@ if barstate.islast
     bool resourceClipped = nearObjectLimit or pointHistoryClipped
     f_panel_cell(statusPanel, 0, 41, "计算/资源", text_color = foregroundColor)
     string resourceStatus = pointHistoryClipped ? "历史点预算裁剪" : nearObjectLimit ? "几何已主动裁剪" : "预算正常"
-    f_panel_cell(statusPanel, 1, 41, "焦L0-3·参L0-2·" + resourceStatus, text_color = resourceClipped ? warningColor : foregroundColor)
+    f_panel_cell(statusPanel, 1, 41, "焦T0-3·参T0-2·" + resourceStatus, text_color = resourceClipped ? warningColor : foregroundColor)
 
     if not showStatusPanel
         table.clear(statusPanel, 0, 0, 1, 41)
@@ -2440,11 +2980,11 @@ if barstate.islast
         [tradeSignalText, tradeSignalDirection, tradeSignalConfirmed] = f_trade_signal_summary(activeEvidence)
         color tradeSignalColor = tradeSignalDirection == 1 ? upColor : tradeSignalDirection == -1 ? downColor : foregroundColor
         f_panel_cell(statusPanel, 0, 0, "交易视图", bgcolor = color.new(foregroundColor, 85), text_color = foregroundColor)
-        f_panel_cell(statusPanel, 1, 0, timeframe.period + "·" + strokeMode, bgcolor = color.new(foregroundColor, 85), text_color = foregroundColor)
+        f_panel_cell(statusPanel, 1, 0, timeframe.period + "·" + THEORY_VERSION, bgcolor = color.new(foregroundColor, 85), text_color = foregroundColor)
         f_panel_cell(statusPanel, 0, 1, "当前信号", text_color = foregroundColor)
         f_panel_cell(statusPanel, 1, 1, tradeSignalText, text_color = tradeSignalConfirmed ? tradeSignalColor : candidateColor)
-        f_panel_cell(statusPanel, 0, 2, "L0 / L1 走势", text_color = foregroundColor)
-        f_panel_cell(statusPanel, 1, 2, f_trend_summary(trendL0) + " | " + f_trend_summary(trendL1), text_color = layer1Color)
+        f_panel_cell(statusPanel, 0, 2, "T0 / T1 走势", text_color = foregroundColor)
+        f_panel_cell(statusPanel, 1, 2, f_trend_summary(trendT0) + " | " + f_trend_summary(trendT1), text_color = layer1Color)
         f_panel_cell(statusPanel, 0, 3, "层间 / 跨周期", text_color = foregroundColor)
         f_panel_cell(statusPanel, 1, 3, f_resonance_summary(activeResonances, 1) + " | " + f_resonance_summary(activeResonances, 2), text_color = layer2Color)
         f_panel_cell(statusPanel, 0, 4, "区间套", text_color = foregroundColor)

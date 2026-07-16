@@ -1,6 +1,9 @@
 # TradingView 免费版严格递归缠论指标
 
-Status: ready-for-agent
+> Superseded by `.scratch/chanlun-theory-v2/spec.md`. This file records the
+> original v1 contract and is retained for provenance only.
+
+Status: superseded
 
 ## Problem Statement
 
