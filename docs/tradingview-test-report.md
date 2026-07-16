@@ -4,6 +4,11 @@
 
 | 日期 | 阶段 | 品种 | 周期 | 配置 | 编译 | 运行 | 重载 | 证据 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 2026-07-16 | 交易视图与紧凑面板 | SKHYNIXUSDT.P / Bitget | 15m | 交易、修订笔、4 自动参考、2,000 K | 通过 | 通过；基础分型和笔隐藏，保留短结构、关键中枢、活动背驰/买卖点与 9 行交易面板 | 未测 | `test-evidence/2026-07-16-skhynix-15m-trading-view.png` |
+| 2026-07-16 | 独立显示开关 | SKHYNIXUSDT.P / Bitget | 15m | 标准、修订笔、11 个显示开关全部关闭 | 通过 | 通过；图表只保留原始 K 线，指标实例继续运行且无运行错误 | 未测 | `test-evidence/2026-07-16-skhynix-15m-all-displays-off.png` |
+| 2026-07-16 | 点/边界独立开关 A | SKHYNIXUSDT.P / Bitget | 15m | 标准；买卖点关闭、失效边界开启，其余显示关闭 | 通过 | 通过；没有买卖点标签，当前可见窗口无边界线，指标继续运行 | 未测 | `test-evidence/2026-07-16-skhynix-15m-ranges-only.png` |
+| 2026-07-16 | 点/边界独立开关 B | SKHYNIXUSDT.P / Bitget | 15m | 标准；买卖点开启、失效边界关闭，其余显示关闭 | 通过 | 通过；买卖点标签独立显示且没有失效边界线 | 未测 | `test-evidence/2026-07-16-skhynix-15m-points-only.png` |
+| 2026-07-16 | 标准视图回归 | SKHYNIXUSDT.P / Bitget | 15m | 标准、修订笔、全部显示开关开启、4 自动参考、2,000 K | 通过 | 通过；原有笔、线段、中枢、事件与完整状态面板正常显示 | 未测 | `test-evidence/2026-07-16-skhynix-15m-standard-regression.png` |
 | 2026-07-16 | 事件身份/可靠起点修复复验 | SNDKUSDT.P / Bitget | 5m | 标准、修订笔、4 自动参考、2,000 K | 通过 | 通过；结构、中枢、递归面板与情景正常 | 未测 | `test-evidence/2026-07-16-sndkusdt-5m-default-rerun.png` |
 | 2026-07-16 | 严格路径修复复验 | SNDKUSDT.P / Bitget | 5m | 研究、严格笔、4 自动参考、2,000 K | 通过 | 通过；图例与面板正确显示严格笔/研究状态 | 未测 | `test-evidence/2026-07-16-sndkusdt-5m-strict-research-rerun.png` |
 | 2026-07-16 | 零参考修复复验 | SNDKUSDT.P / Bitget | 5m | 标准、修订笔、0 参考周期、2,000 K | 通过 | 通过；参考 1-4 显示关闭，焦点递归继续运行 | 未测 | `test-evidence/2026-07-16-sndkusdt-5m-zero-references-rerun.png` |
@@ -28,6 +33,7 @@
 
 ## 尚需持续观察
 
+- 本次显示优化及审查补测的全部配置均在记录结果后从图表移除；最终图表中没有残留 `缠论递归` 实例。
 - 本次修复复验的四个实例均在记录结果后从图表移除；用户已有的 `LC 缠论Pro V2` 未被修改或移除。
 - 候选到确认、参考周期收盘、证据失效和情景撤销属于实时状态迁移，尚未完成逐事件 Bar Replay 对照。
 - 动态 JSON 已由官方编译器接受；本轮未在用户账户中创建持久提醒，因此事件去重、提醒频率和 webhook 实际投递均未形成运行证据。

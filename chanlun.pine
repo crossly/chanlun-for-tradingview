@@ -17,17 +17,28 @@ indicator(
 // Theoretical settings are intentionally fixed. Only the accepted stroke
 // definition and presentation/integration settings are configurable.
 string GROUP_THEORY = "理论口径"
-string GROUP_VIEW = "显示"
+string GROUP_VIEW = "显示预设"
+string GROUP_DISPLAY = "显示开关"
 string GROUP_REFERENCE = "参考周期"
 string GROUP_ALERT = "提醒"
 int MACD_WARMUP_BARS = 200
 
 string strokeMode = input.string("修订笔", "笔口径", options = ["修订笔", "严格笔"], group = GROUP_THEORY)
-string viewPreset = input.string("标准", "显示预设", options = ["简洁", "标准", "研究"], group = GROUP_VIEW)
+string viewPreset = input.string("标准", "显示预设", options = ["交易", "简洁", "标准", "研究"], group = GROUP_VIEW)
 string colorTheme = input.string("TradingView", "颜色主题", options = ["TradingView", "中国市场", "色觉友好"], group = GROUP_VIEW)
-bool showCandidates = input.bool(true, "显示候选结构", group = GROUP_VIEW)
-bool showScenarios = input.bool(true, "显示情景推演", group = GROUP_VIEW)
 int detailBars = input.int(2000, "详细绘图窗口", minval = 300, maxval = 5000, step = 100, group = GROUP_VIEW)
+
+bool showCandidates = input.bool(true, "候选结构", group = GROUP_DISPLAY, inline = "state")
+bool showScenarios = input.bool(true, "情景推演", group = GROUP_DISPLAY, inline = "state")
+bool showFractals = input.bool(true, "基础分型", group = GROUP_DISPLAY, inline = "unit")
+bool showStrokes = input.bool(true, "笔", group = GROUP_DISPLAY, inline = "unit")
+bool showSegments = input.bool(true, "线段", group = GROUP_DISPLAY, inline = "segment")
+bool showHigherSegments = input.bool(true, "高阶线段", group = GROUP_DISPLAY, inline = "segment")
+bool showCenters = input.bool(true, "中枢", group = GROUP_DISPLAY, inline = "signal")
+bool showDivergences = input.bool(true, "背驰", group = GROUP_DISPLAY, inline = "signal")
+bool showBuySellPoints = input.bool(true, "买卖点", group = GROUP_DISPLAY, inline = "point")
+bool showEvidenceRanges = input.bool(true, "失效边界", group = GROUP_DISPLAY, inline = "point")
+bool showStatusPanel = input.bool(true, "状态面板", group = GROUP_DISPLAY)
 
 bool useAutoReferences = input.bool(true, "自动参考周期", group = GROUP_REFERENCE)
 int referenceCount = input.int(4, "参考周期数量", minval = 0, maxval = 4, group = GROUP_REFERENCE)
@@ -2095,15 +2106,36 @@ f_scenario_tooltip(array<Scenario> scenarios) =>
             result += "\n" + str.tostring(scenarioIndex + 1) + ". " + scenario.name + "｜触发: " + scenario.triggerText + "｜失效: " + scenario.invalidationText
     result
 
+f_trade_signal_summary(array<Evidence> ledger) =>
+    string result = "无活动信号"
+    int resultDirection = 0
+    bool resultConfirmed = false
+    int latestKnownTime = na
+    int latestPriority = 0
+    int evidenceCount = array.size(ledger)
+    if evidenceCount > 0
+        for evidenceIndex = 0 to evidenceCount - 1
+            Evidence evidence = array.get(ledger, evidenceIndex)
+            int priority = evidence.kind >= 11 ? 2 : 1
+            bool later = not na(evidence.knownTime) and (na(latestKnownTime) or evidence.knownTime > latestKnownTime or (evidence.knownTime == latestKnownTime and priority > latestPriority))
+            if later
+                string kindText = evidence.kind == 1 ? "盘背" : evidence.kind == 2 ? "趋背" : evidence.kind == 11 ? "1类" : evidence.kind == 12 ? "2类" : "3类"
+                result := kindText + (evidence.direction == 1 ? "买" : "卖") + "·" + evidence.marketTimeframe + "·L" + str.tostring(evidence.layer) + "·" + (evidence.confirmed ? "确认" : "候选")
+                resultDirection := evidence.direction
+                resultConfirmed := evidence.confirmed
+                latestKnownTime := evidence.knownTime
+                latestPriority := priority
+    [result, resultDirection, resultConfirmed]
+
 f_draw_centers(array<Center> centers, array<box> boxes, array<label> labels, color layerColor, int maxDraw, int detailBars, bool showWave) =>
     int centerCount = array.size(centers)
     if centerCount > 0 and maxDraw > 0
         int firstCenter = math.max(0, centerCount - maxDraw)
         for i = firstCenter to centerCount - 1
             Center current = array.get(centers, i)
-            if current.endIndex >= bar_index - detailBars and array.size(boxes) < 480
+            bool visualConfirmed = current.confirmed and current.stateConfirmed
+            if (visualConfirmed or showCandidates) and current.endIndex >= bar_index - detailBars and array.size(boxes) < 480
                 int drawLeft = math.max(current.startIndex, bar_index - detailBars)
-                bool visualConfirmed = current.confirmed and current.stateConfirmed
                 color centerColor = visualConfirmed ? layerColor : candidateColor
                 string centerStyle = visualConfirmed ? line.style_solid : line.style_dashed
                 box coreBox = box.new(left = drawLeft, top = current.zg, right = current.endIndex, bottom = current.zd, xloc = xloc.bar_index, border_color = centerColor, border_width = visualConfirmed ? 2 : 1, border_style = centerStyle, bgcolor = color.new(centerColor, visualConfirmed ? 88 : 93))
@@ -2119,49 +2151,63 @@ f_draw_centers(array<Center> centers, array<box> boxes, array<label> labels, col
                     label centerLabel = label.new(current.endIndex, current.zg, centerText, xloc = xloc.bar_index, style = label.style_label_left, color = color.new(centerColor, 74), textcolor = foregroundColor, size = size.tiny, tooltip = centerTooltip)
                     array.push(labels, centerLabel)
 
-f_draw_divergences(array<Divergence> divergences, array<label> labels, color layerColor, int maxDraw, int detailBars) =>
+f_draw_divergences(array<Divergence> divergences, array<label> labels, color layerColor, int maxDraw, int detailBars, bool activeOnly, bool compactTrading) =>
     int divergenceCount = array.size(divergences)
+    int drawnCount = 0
     if divergenceCount > 0 and maxDraw > 0
-        int firstDivergence = math.max(0, divergenceCount - maxDraw)
-        for i = firstDivergence to divergenceCount - 1
+        for offset = 0 to divergenceCount - 1
+            if drawnCount >= maxDraw or array.size(labels) >= 480
+                break
+            int i = divergenceCount - 1 - offset
             Divergence current = array.get(divergences, i)
-            if current.structureIndex >= bar_index - detailBars and (current.confirmed or showCandidates) and array.size(labels) < 480
+            bool activeVisible = not activeOnly or not current.confirmed or current.valid
+            if activeVisible and current.structureIndex >= bar_index - detailBars and (current.confirmed or showCandidates) and array.size(labels) < 480
                 color divergenceColor = current.confirmed ? layerColor : candidateColor
                 string kindText = current.kind == 2 ? "趋背" : "盘背"
                 string stateText = current.confirmed ? "确" : "候"
-                string divergenceText = kindText + "·L" + str.tostring(current.layer) + "·" + stateText
+                string divergenceText = compactTrading ? kindText + (current.direction == 1 ? "卖" : "买") + "·L" + str.tostring(current.layer) : kindText + "·L" + str.tostring(current.layer) + "·" + stateText
                 string difText = current.difWeaker ? "减弱" : "未减弱"
                 string divergenceTooltip = "MACD 同向面积: " + str.tostring(current.enteringArea, "#.####") + " -> " + str.tostring(current.leavingArea, "#.####") + "\n面积比: " + str.tostring(current.areaRatio, "#.###") + "\nDIF 极值: " + difText + "\n结构时间: " + str.format_time(current.structureTime, "yyyy-MM-dd HH:mm") + (current.confirmed ? "\n确认时间: " + str.format_time(current.confirmationTime, "yyyy-MM-dd HH:mm") : "")
                 string divergenceStyle = current.direction == 1 ? label.style_label_down : label.style_label_up
-                label divergenceLabel = label.new(current.structureIndex, current.structurePrice, divergenceText, xloc = xloc.bar_index, style = divergenceStyle, color = color.new(divergenceColor, current.confirmed ? 18 : 55), textcolor = foregroundColor, size = size.tiny, tooltip = divergenceTooltip)
+                label divergenceLabel = label.new(current.structureIndex, current.structurePrice, divergenceText, xloc = xloc.bar_index, style = divergenceStyle, color = color.new(divergenceColor, current.confirmed ? 18 : 55), textcolor = foregroundColor, size = compactTrading ? size.small : size.tiny, tooltip = divergenceTooltip)
                 array.push(labels, divergenceLabel)
+                drawnCount += 1
 
-f_draw_points(array<BuySellPoint> points, array<line> lines, array<label> labels, int maxDraw, int detailBars) =>
+f_draw_points(array<BuySellPoint> points, array<line> lines, array<label> labels, int maxDraw, int detailBars, bool activeOnly, bool drawPointLabels, bool drawEvidenceRanges, bool compactTrading) =>
     int pointCount = array.size(points)
-    if pointCount > 0 and maxDraw > 0
-        int firstPoint = math.max(0, pointCount - maxDraw)
-        for i = firstPoint to pointCount - 1
+    int drawnCount = 0
+    if pointCount > 0 and maxDraw > 0 and (drawPointLabels or drawEvidenceRanges)
+        for offset = 0 to pointCount - 1
+            if drawnCount >= maxDraw or ((not drawPointLabels or array.size(labels) >= 480) and (not drawEvidenceRanges or array.size(lines) >= 470))
+                break
+            int i = pointCount - 1 - offset
             BuySellPoint current = array.get(points, i)
-            if (current.confirmed or showCandidates) and array.size(labels) < 480
+            bool activeVisible = not activeOnly or not current.confirmed or current.valid
+            bool labelVisible = drawPointLabels and (current.confirmed or showCandidates) and array.size(labels) < 480
+            bool rangeVisible = drawEvidenceRanges and current.confirmed and current.structureIndex >= bar_index - detailBars and array.size(lines) < 470
+            if activeVisible and (labelVisible or rangeVisible)
                 color identityColor = current.direction == 1 ? upColor : downColor
-                color pointColor = not current.confirmed ? candidateColor : current.valid ? identityColor : color.gray
-                string sideText = current.direction == 1 ? "B" : "S"
-                string pointText = str.tostring(current.pointClass) + sideText + "·L" + str.tostring(current.layer)
-                string pointStatus = not current.confirmed ? "候选" : current.valid ? (current.invalidationCandidate ? "失效候选" : "有效") : "已失效"
-                string delayText = na(current.confirmationDelayBars) ? "待确认" : str.tostring(current.confirmationDelayBars) + " K"
-                string pointTooltip = "身份: " + str.tostring(current.pointClass) + " 类" + (current.direction == 1 ? "买点" : "卖点") + "\n状态: " + pointStatus + "\n结构价: " + str.tostring(current.structurePrice, format.mintick) + "\n结构时间: " + str.format_time(current.structureTime, "yyyy-MM-dd HH:mm") + (current.confirmed ? "\n确认价: " + str.tostring(current.confirmationPrice, format.mintick) + "\n确认时间: " + str.format_time(current.confirmationTime, "yyyy-MM-dd HH:mm") + "\n确认延迟: " + delayText : "") + "\n失效边界: " + str.tostring(current.invalidationPrice, format.mintick)
-                string pointStyle = current.direction == 1 ? label.style_label_up : label.style_label_down
-                label pointLabel = label.new(current.structureTime, current.structurePrice, pointText, xloc = xloc.bar_time, style = pointStyle, color = color.new(pointColor, current.confirmed ? 12 : 52), textcolor = foregroundColor, size = size.tiny, tooltip = pointTooltip)
-                array.push(labels, pointLabel)
-                if current.confirmed and current.structureIndex >= bar_index - detailBars and array.size(lines) < 470
+                if labelVisible
+                    color pointColor = not current.confirmed ? candidateColor : current.valid ? identityColor : color.gray
+                    string sideText = current.direction == 1 ? "B" : "S"
+                    string pointText = compactTrading ? str.tostring(current.pointClass) + (current.direction == 1 ? "买" : "卖") + "·L" + str.tostring(current.layer) : str.tostring(current.pointClass) + sideText + "·L" + str.tostring(current.layer)
+                    string pointStatus = not current.confirmed ? "候选" : current.valid ? (current.invalidationCandidate ? "失效候选" : "有效") : "已失效"
+                    string delayText = na(current.confirmationDelayBars) ? "待确认" : str.tostring(current.confirmationDelayBars) + " K"
+                    string pointTooltip = "身份: " + str.tostring(current.pointClass) + " 类" + (current.direction == 1 ? "买点" : "卖点") + "\n状态: " + pointStatus + "\n结构价: " + str.tostring(current.structurePrice, format.mintick) + "\n结构时间: " + str.format_time(current.structureTime, "yyyy-MM-dd HH:mm") + (current.confirmed ? "\n确认价: " + str.tostring(current.confirmationPrice, format.mintick) + "\n确认时间: " + str.format_time(current.confirmationTime, "yyyy-MM-dd HH:mm") + "\n确认延迟: " + delayText : "") + "\n失效边界: " + str.tostring(current.invalidationPrice, format.mintick)
+                    string pointStyle = current.direction == 1 ? label.style_label_up : label.style_label_down
+                    label pointLabel = label.new(current.structureTime, current.structurePrice, pointText, xloc = xloc.bar_time, style = pointStyle, color = color.new(pointColor, current.confirmed ? 8 : 48), textcolor = foregroundColor, size = compactTrading ? size.small : size.tiny, tooltip = pointTooltip)
+                    array.push(labels, pointLabel)
+                if rangeVisible
                     int evidenceEndTime = current.valid ? time : current.evidenceEndTime
                     color evidenceColor = current.invalidationCandidate ? candidateColor : current.valid ? identityColor : color.gray
                     line evidenceLine = line.new(current.evidenceStartTime, current.invalidationPrice, evidenceEndTime, current.invalidationPrice, xloc = xloc.bar_time, color = color.new(evidenceColor, 45), style = line.style_dotted, width = 1)
                     array.push(lines, evidenceLine)
+                drawnCount += 1
+    drawnCount
 
 f_draw_scenarios(array<Scenario> scenarios, array<line> lines, array<label> labels) =>
     int scenarioCount = array.size(scenarios)
-    if showScenarios and scenarioCount > 0
+    if showScenarios and viewPreset != "交易" and scenarioCount > 0
         for scenarioIndex = 0 to scenarioCount - 1
             Scenario scenario = array.get(scenarios, scenarioIndex)
             color scenarioColor = scenario.direction == 1 ? upColor : scenario.direction == -1 ? downColor : candidateColor
@@ -2182,9 +2228,10 @@ f_draw_scenarios(array<Scenario> scenarios, array<line> lines, array<label> labe
 var array<line> structureLines = array.new<line>()
 var array<label> structureLabels = array.new<label>()
 var array<box> structureBoxes = array.new<box>()
-int pointRenderBudget = viewPreset == "简洁" ? 120 : viewPreset == "标准" ? 300 : 260
+bool tradingView = viewPreset == "交易"
+int pointRenderBudget = tradingView ? 220 : viewPreset == "简洁" ? 120 : viewPreset == "标准" ? 300 : 260
 int totalPointHistory = array.size(pointsL0) + array.size(pointsL1) + array.size(pointsL2) + array.size(pointsL3)
-bool pointHistoryClipped = totalPointHistory > pointRenderBudget
+bool pointHistoryClipped = (showBuySellPoints or showEvidenceRanges) and totalPointHistory > pointRenderBudget
 
 if barstate.islast
     int oldLineCount = array.size(structureLines)
@@ -2204,7 +2251,7 @@ if barstate.islast
         array.clear(structureBoxes)
 
     int strokeCountForDraw = array.size(viewStrokes)
-    if viewPreset != "简洁" and strokeCountForDraw > 0
+    if showStrokes and (viewPreset == "标准" or viewPreset == "研究") and strokeCountForDraw > 0
         int strokeDrawBudget = viewPreset == "标准" ? 150 : 180
         int firstStrokeToDraw = math.max(0, strokeCountForDraw - strokeDrawBudget)
         for i = firstStrokeToDraw to strokeCountForDraw - 1
@@ -2216,8 +2263,8 @@ if barstate.islast
                 array.push(structureLines, strokeLine)
 
     int l1CountForDraw = array.size(segmentsL1)
-    if l1CountForDraw > 0
-        int l1DrawBudget = viewPreset == "简洁" ? 25 : viewPreset == "标准" ? 55 : 70
+    if showSegments and l1CountForDraw > 0
+        int l1DrawBudget = tradingView ? 18 : viewPreset == "简洁" ? 25 : viewPreset == "标准" ? 55 : 70
         int firstL1ToDraw = math.max(0, l1CountForDraw - l1DrawBudget)
         for i = firstL1ToDraw to l1CountForDraw - 1
             Unit segment = array.get(segmentsL1, i)
@@ -2227,17 +2274,17 @@ if barstate.islast
                 line segmentLine = line.new(segment.startTime, segment.startPrice, segment.endTime, segment.endPrice, xloc = xloc.bar_time, color = segmentColor, style = segmentStyle, width = 3)
                 array.push(structureLines, segmentLine)
 
-    if viewPreset == "研究"
+    if showHigherSegments and (viewPreset == "研究" or tradingView)
         int l2CountForDraw = array.size(segmentsL2)
         if l2CountForDraw > 0
-            int firstL2ToDraw = math.max(0, l2CountForDraw - 24)
+            int firstL2ToDraw = math.max(0, l2CountForDraw - (tradingView ? 6 : 24))
             for i = firstL2ToDraw to l2CountForDraw - 1
                 Unit segment = array.get(segmentsL2, i)
                 if segment.endIndex >= bar_index - detailBars and (segment.confirmed or showCandidates)
                     line segmentLine = line.new(segment.startTime, segment.startPrice, segment.endTime, segment.endPrice, xloc = xloc.bar_time, color = segment.confirmed ? layer2Color : candidateColor, style = segment.confirmed ? line.style_solid : line.style_dashed, width = 4)
                     array.push(structureLines, segmentLine)
         int l3CountForDraw = array.size(segmentsL3)
-        if l3CountForDraw > 0
+        if not tradingView and l3CountForDraw > 0
             int firstL3ToDraw = math.max(0, l3CountForDraw - 8)
             for i = firstL3ToDraw to l3CountForDraw - 1
                 Unit segment = array.get(segmentsL3, i)
@@ -2246,7 +2293,7 @@ if barstate.islast
                     array.push(structureLines, segmentLine)
 
     int fractalCountForDraw = array.size(baseFractals)
-    if viewPreset == "研究" and fractalCountForDraw > 0
+    if showFractals and viewPreset == "研究" and fractalCountForDraw > 0
         int firstFractalToDraw = math.max(0, fractalCountForDraw - 50)
         for i = firstFractalToDraw to fractalCountForDraw - 1
             Fractal fractal = array.get(baseFractals, i)
@@ -2255,34 +2302,27 @@ if barstate.islast
                 label fractalLabel = label.new(fractal.structureIndex, fractal.price, fractalText, xloc = xloc.bar_index, style = fractal.kind == 1 ? label.style_label_down : label.style_label_up, color = color.new(fractal.kind == 1 ? downColor : upColor, 72), textcolor = foregroundColor, size = size.tiny)
                 array.push(structureLabels, fractalLabel)
 
-    int l0CenterDraw = viewPreset == "简洁" ? 1 : viewPreset == "标准" ? 25 : 30
-    int l1CenterDraw = viewPreset == "简洁" ? 1 : viewPreset == "标准" ? 12 : 18
-    int l2CenterDraw = viewPreset == "简洁" ? 1 : viewPreset == "标准" ? 4 : 8
-    int l3CenterDraw = viewPreset == "简洁" ? 1 : viewPreset == "标准" ? 2 : 4
+    int l0CenterDraw = not showCenters ? 0 : tradingView ? 2 : viewPreset == "简洁" ? 1 : viewPreset == "标准" ? 25 : 30
+    int l1CenterDraw = not showCenters ? 0 : tradingView ? 2 : viewPreset == "简洁" ? 1 : viewPreset == "标准" ? 12 : 18
+    int l2CenterDraw = not showCenters ? 0 : tradingView ? 1 : viewPreset == "简洁" ? 1 : viewPreset == "标准" ? 4 : 8
+    int l3CenterDraw = not showCenters ? 0 : tradingView ? 0 : viewPreset == "简洁" ? 1 : viewPreset == "标准" ? 2 : 4
     bool showWaveCenters = viewPreset == "研究"
     f_draw_centers(centersL0, structureBoxes, structureLabels, foregroundColor, l0CenterDraw, detailBars, showWaveCenters)
     f_draw_centers(centersL1, structureBoxes, structureLabels, layer1Color, l1CenterDraw, detailBars, showWaveCenters)
     f_draw_centers(centersL2, structureBoxes, structureLabels, layer2Color, l2CenterDraw, detailBars, showWaveCenters)
     f_draw_centers(centersL3, structureBoxes, structureLabels, layer3Color, l3CenterDraw, detailBars, showWaveCenters)
 
-    int divergenceDraw = viewPreset == "简洁" ? 1 : viewPreset == "标准" ? 10 : 12
-    f_draw_divergences(divergencesL0, structureLabels, foregroundColor, divergenceDraw, detailBars)
-    f_draw_divergences(divergencesL1, structureLabels, layer1Color, divergenceDraw, detailBars)
-    f_draw_divergences(divergencesL2, structureLabels, layer2Color, divergenceDraw, detailBars)
-    f_draw_divergences(divergencesL3, structureLabels, layer3Color, divergenceDraw, detailBars)
+    int divergenceDraw = not showDivergences ? 0 : tradingView ? 4 : viewPreset == "简洁" ? 1 : viewPreset == "标准" ? 10 : 12
+    f_draw_divergences(divergencesL0, structureLabels, foregroundColor, divergenceDraw, detailBars, tradingView, tradingView)
+    f_draw_divergences(divergencesL1, structureLabels, layer1Color, divergenceDraw, detailBars, tradingView, tradingView)
+    f_draw_divergences(divergencesL2, structureLabels, layer2Color, divergenceDraw, detailBars, tradingView, tradingView)
+    f_draw_divergences(divergencesL3, structureLabels, layer3Color, divergenceDraw, detailBars, tradingView, tradingView)
 
-    int remainingPointBudget = pointRenderBudget
-    int l3PointDraw = math.min(array.size(pointsL3), remainingPointBudget)
-    remainingPointBudget -= l3PointDraw
-    int l2PointDraw = math.min(array.size(pointsL2), remainingPointBudget)
-    remainingPointBudget -= l2PointDraw
-    int l1PointDraw = math.min(array.size(pointsL1), remainingPointBudget)
-    remainingPointBudget -= l1PointDraw
-    int l0PointDraw = math.min(array.size(pointsL0), remainingPointBudget)
-    f_draw_points(pointsL0, structureLines, structureLabels, l0PointDraw, detailBars)
-    f_draw_points(pointsL1, structureLines, structureLabels, l1PointDraw, detailBars)
-    f_draw_points(pointsL2, structureLines, structureLabels, l2PointDraw, detailBars)
-    f_draw_points(pointsL3, structureLines, structureLabels, l3PointDraw, detailBars)
+    int remainingPointBudget = (showBuySellPoints or showEvidenceRanges) ? pointRenderBudget : 0
+    remainingPointBudget -= f_draw_points(pointsL3, structureLines, structureLabels, remainingPointBudget, detailBars, tradingView, showBuySellPoints, showEvidenceRanges, tradingView)
+    remainingPointBudget -= f_draw_points(pointsL2, structureLines, structureLabels, remainingPointBudget, detailBars, tradingView, showBuySellPoints, showEvidenceRanges, tradingView)
+    remainingPointBudget -= f_draw_points(pointsL1, structureLines, structureLabels, remainingPointBudget, detailBars, tradingView, showBuySellPoints, showEvidenceRanges, tradingView)
+    remainingPointBudget -= f_draw_points(pointsL0, structureLines, structureLabels, remainingPointBudget, detailBars, tradingView, showBuySellPoints, showEvidenceRanges, tradingView)
     f_draw_scenarios(activeScenarios, structureLines, structureLabels)
 
 f_panel_cell(table panel, int column, int row, string cellText, color text_color, color bgcolor = na, string tooltip = "") =>
@@ -2392,5 +2432,30 @@ if barstate.islast
     f_panel_cell(statusPanel, 0, 41, "计算/资源", text_color = foregroundColor)
     string resourceStatus = pointHistoryClipped ? "历史点预算裁剪" : nearObjectLimit ? "几何已主动裁剪" : "预算正常"
     f_panel_cell(statusPanel, 1, 41, "焦L0-3·参L0-2·" + resourceStatus, text_color = resourceClipped ? warningColor : foregroundColor)
+
+    if not showStatusPanel
+        table.clear(statusPanel, 0, 0, 1, 41)
+    else if tradingView
+        table.clear(statusPanel, 0, 0, 1, 41)
+        [tradeSignalText, tradeSignalDirection, tradeSignalConfirmed] = f_trade_signal_summary(activeEvidence)
+        color tradeSignalColor = tradeSignalDirection == 1 ? upColor : tradeSignalDirection == -1 ? downColor : foregroundColor
+        f_panel_cell(statusPanel, 0, 0, "交易视图", bgcolor = color.new(foregroundColor, 85), text_color = foregroundColor)
+        f_panel_cell(statusPanel, 1, 0, timeframe.period + "·" + strokeMode, bgcolor = color.new(foregroundColor, 85), text_color = foregroundColor)
+        f_panel_cell(statusPanel, 0, 1, "当前信号", text_color = foregroundColor)
+        f_panel_cell(statusPanel, 1, 1, tradeSignalText, text_color = tradeSignalConfirmed ? tradeSignalColor : candidateColor)
+        f_panel_cell(statusPanel, 0, 2, "L0 / L1 走势", text_color = foregroundColor)
+        f_panel_cell(statusPanel, 1, 2, f_trend_summary(trendL0) + " | " + f_trend_summary(trendL1), text_color = layer1Color)
+        f_panel_cell(statusPanel, 0, 3, "层间 / 跨周期", text_color = foregroundColor)
+        f_panel_cell(statusPanel, 1, 3, f_resonance_summary(activeResonances, 1) + " | " + f_resonance_summary(activeResonances, 2), text_color = layer2Color)
+        f_panel_cell(statusPanel, 0, 4, "区间套", text_color = foregroundColor)
+        f_panel_cell(statusPanel, 1, 4, f_nesting_summary(nestingState), text_color = layer3Color, tooltip = f_nesting_tooltip(nestingState))
+        f_panel_cell(statusPanel, 0, 5, "活动证据", text_color = foregroundColor)
+        f_panel_cell(statusPanel, 1, 5, f_evidence_summary(activeEvidence), text_color = foregroundColor)
+        f_panel_cell(statusPanel, 0, 6, "参考周期", text_color = foregroundColor)
+        f_panel_cell(statusPanel, 1, 6, str.tostring(activeReferenceCount) + "/4 已确认", text_color = foregroundColor)
+        f_panel_cell(statusPanel, 0, 7, "可靠起点", text_color = foregroundColor)
+        f_panel_cell(statusPanel, 1, 7, reliableDate, text_color = na(reliableStartTime) ? warningColor : foregroundColor)
+        f_panel_cell(statusPanel, 0, 8, "计算 / 资源", text_color = foregroundColor)
+        f_panel_cell(statusPanel, 1, 8, highestLayer + "·" + resourceStatus, text_color = resourceClipped ? warningColor : foregroundColor)
 
 plot(normalizedClose, "标准价格锚", color = color.new(foregroundColor, 100), display = display.none)
