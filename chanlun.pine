@@ -70,8 +70,6 @@ type KBar
     int endTime
     float high
     float low
-    float rawRangeHigh
-    float rawRangeLow
     int highIndex
     int lowIndex
     int highTime
@@ -345,7 +343,7 @@ type ReferenceEngine
     TrendState trendT2
 
 f_copy_kbar(KBar source) =>
-    KBar.new(source.startIndex, source.endIndex, source.startTime, source.endTime, source.high, source.low, source.rawRangeHigh, source.rawRangeLow, source.highIndex, source.lowIndex, source.highTime, source.lowTime, source.direction)
+    KBar.new(source.startIndex, source.endIndex, source.startTime, source.endTime, source.high, source.low, source.highIndex, source.lowIndex, source.highTime, source.lowTime, source.direction)
 
 f_copy_fractal(Fractal source) =>
     Fractal.new(source.kind, source.kPosition, source.structureIndex, source.structureTime, source.confirmationTime, source.price)
@@ -380,10 +378,6 @@ f_copy_units(array<Unit> source) =>
 f_new_reference_engine() =>
     ReferenceEngine.new(ReferenceState.new(false, 0, na, 0, na, false), array.new<KBar>(), array.new<Fractal>(), array.new<Unit>(), array.new<Unit>(), array.new<Unit>(), array.new<Unit>(), array.new<Unit>(), array.new<float>(), array.new<float>(), array.new<int>(), array.new<int>(), array.new<float>(), array.new<float>(), array.new<Center>(), array.new<Center>(), array.new<Center>(), array.new<Divergence>(), array.new<Divergence>(), array.new<Divergence>(), array.new<BuySellPoint>(), array.new<BuySellPoint>(), array.new<BuySellPoint>(), na, na, na)
 
-f_copy_reference_engine(ReferenceEngine source) =>
-    ReferenceState copiedState = ReferenceState.new(source.state.seedReady, source.state.seedDirection, source.state.lastSourceTime, source.state.nextIndex, source.state.lastKnownTime, source.state.structuresDirty)
-    ReferenceEngine.new(copiedState, f_copy_kbars(source.bars), f_copy_fractals(source.endpoints), f_copy_units(source.strokes), array.new<Unit>(), array.new<Unit>(), array.new<Unit>(), array.new<Unit>(), array.copy(source.pendingHighs), array.copy(source.pendingLows), array.copy(source.pendingIndices), array.copy(source.pendingTimes), array.copy(source.histValues), array.copy(source.difValues), array.new<Center>(), array.new<Center>(), array.new<Center>(), array.new<Divergence>(), array.new<Divergence>(), array.new<Divergence>(), array.new<BuySellPoint>(), array.new<BuySellPoint>(), array.new<BuySellPoint>(), na, na, na)
-
 f_next_reference_seconds(int seconds) =>
     seconds < 60 ? 60 : seconds < 300 ? 300 : seconds < 900 ? 900 : seconds < 3600 ? 3600 : seconds < 14400 ? 14400 : seconds < 86400 ? 86400 : seconds < 604800 ? 604800 : seconds < 2592000 ? 2592000 : seconds < 7776000 ? 7776000 : seconds < 31536000 ? 31536000 : 0
 
@@ -398,7 +392,7 @@ f_auto_reference_timeframe(int position) =>
 
 f_reference_source() =>
     [referenceDif, referenceSignal, referenceHist] = ta.macd(math.round_to_mintick(close), 12, 26, 9)
-    [time[1], math.round_to_mintick(high[1]), math.round_to_mintick(low[1]), referenceDif[1], referenceHist[1], time, math.round_to_mintick(high), math.round_to_mintick(low), referenceDif, referenceHist]
+    [time[1], math.round_to_mintick(high[1]), math.round_to_mintick(low[1]), referenceDif[1], referenceHist[1]]
 
 f_contains(float firstHigh, float firstLow, float secondHigh, float secondLow) =>
     (firstHigh >= secondHigh and firstLow <= secondLow) or (secondHigh >= firstHigh and secondLow <= firstLow)
@@ -428,7 +422,7 @@ f_ingest_kbar(array<KBar> bars, float rawHigh, float rawLow, int rawIndex, int r
     bool appended = false
     int count = array.size(bars)
     if count == 0
-        array.push(bars, KBar.new(rawIndex, rawIndex, rawTime, rawTime, rawHigh, rawLow, rawHigh, rawLow, rawIndex, rawIndex, rawTime, rawTime, forcedDirection))
+        array.push(bars, KBar.new(rawIndex, rawIndex, rawTime, rawTime, rawHigh, rawLow, rawIndex, rawIndex, rawTime, rawTime, forcedDirection))
         appended := true
     else
         KBar lastBar = array.get(bars, count - 1)
@@ -441,8 +435,6 @@ f_ingest_kbar(array<KBar> bars, float rawHigh, float rawLow, int rawIndex, int r
             direction := lastBar.direction
         if f_contains(lastBar.high, lastBar.low, rawHigh, rawLow)
             direction := direction == 0 ? forcedDirection : direction
-            lastBar.rawRangeHigh := math.max(lastBar.rawRangeHigh, rawHigh)
-            lastBar.rawRangeLow := math.min(lastBar.rawRangeLow, rawLow)
             if direction >= 0
                 if rawHigh >= lastBar.high
                     lastBar.high := rawHigh
@@ -467,7 +459,7 @@ f_ingest_kbar(array<KBar> bars, float rawHigh, float rawLow, int rawIndex, int r
             array.set(bars, count - 1, lastBar)
         else
             int nextDirection = f_relation(lastBar.high, lastBar.low, rawHigh, rawLow)
-            array.push(bars, KBar.new(rawIndex, rawIndex, rawTime, rawTime, rawHigh, rawLow, rawHigh, rawLow, rawIndex, rawIndex, rawTime, rawTime, nextDirection))
+            array.push(bars, KBar.new(rawIndex, rawIndex, rawTime, rawTime, rawHigh, rawLow, rawIndex, rawIndex, rawTime, rawTime, nextDirection))
             appended := true
     appended
 
@@ -486,23 +478,6 @@ f_detect_confirmed_fractal(array<KBar> bars, int confirmationTime) =>
         else if isBottom
             result := Fractal.new(-1, middlePosition, middleBar.lowIndex, middleBar.lowTime, confirmationTime, middleBar.low)
     result
-
-f_is_real_extreme(array<KBar> bars, Fractal startPoint, Fractal endPoint) =>
-    bool valid = true
-    int fromPosition = math.min(startPoint.kPosition, endPoint.kPosition)
-    int toPosition = math.max(startPoint.kPosition, endPoint.kPosition)
-    if toPosition >= fromPosition
-        for i = fromPosition to toPosition
-            KBar current = array.get(bars, i)
-            if startPoint.kind == 1
-                if current.rawRangeHigh > startPoint.price or current.rawRangeLow < endPoint.price
-                    valid := false
-                    break
-            else
-                if current.rawRangeLow < startPoint.price or current.rawRangeHigh > endPoint.price
-                    valid := false
-                    break
-    valid
 
 f_unit_macd_area(array<float> histValues, int startIndex, int endIndex, int direction) =>
     float area = 0.0
@@ -532,7 +507,7 @@ f_apply_unit_strength(Unit unit, array<float> histValues, array<float> difValues
     unit.difExtreme := f_unit_dif_extreme(difValues, unit.startIndex, unit.endIndex, unit.direction)
     unit
 
-f_update_strokes(array<KBar> bars, array<Fractal> endpoints, array<Unit> strokes, Fractal newFractal, array<float> histValues, array<float> difValues, bool allowConfirmation) =>
+f_update_strokes(array<Fractal> endpoints, array<Unit> strokes, Fractal newFractal, array<float> histValues, array<float> difValues, bool allowConfirmation) =>
     bool changed = false
     int endpointCount = array.size(endpoints)
     if endpointCount == 0
@@ -560,8 +535,7 @@ f_update_strokes(array<KBar> bars, array<Fractal> endpoints, array<Unit> strokes
         else
             bool enoughSyntheticBars = math.abs(newFractal.kPosition - lastEndpoint.kPosition) >= 3
             bool enoughRawBars = math.abs(newFractal.structureIndex - lastEndpoint.structureIndex) >= 4
-            bool realExtreme = enoughSyntheticBars and enoughRawBars and f_is_real_extreme(bars, lastEndpoint, newFractal)
-            if realExtreme and allowConfirmation
+            if enoughSyntheticBars and enoughRawBars and allowConfirmation
                 int strokeCount = array.size(strokes)
                 if strokeCount > 0
                     Unit previousStroke = array.get(strokes, strokeCount - 1)
@@ -1965,7 +1939,7 @@ f_process_reference_bar(bool enabled, int sourceTime, float sourceHigh, float so
         if appendedSynthetic
             Fractal confirmedFractal = f_detect_confirmed_fractal(bars, knownTime)
             if not na(confirmedFractal)
-                bool structuresChanged = f_update_strokes(bars, endpoints, strokes, confirmedFractal, histValues, difValues, allowConfirmation)
+                bool structuresChanged = f_update_strokes(endpoints, strokes, confirmedFractal, histValues, difValues, allowConfirmation)
                 state.structuresDirty := state.structuresDirty or structuresChanged
         if not allowConfirmation
             f_extend_terminal_candidate(strokes, sourceIndex, sourceTime, sourceHigh, sourceLow, histValues, difValues)
@@ -2067,101 +2041,57 @@ float referenceSourceHigh1 = na
 float referenceSourceLow1 = na
 float referenceSourceDif1 = na
 float referenceSourceHist1 = na
-int referencePreviewTime1 = na
-float referencePreviewHigh1 = na
-float referencePreviewLow1 = na
-float referencePreviewDif1 = na
-float referencePreviewHist1 = na
 if referenceEnabled1
-    [requestedTime1, requestedHigh1, requestedLow1, requestedDif1, requestedHist1, previewTime1, previewHigh1, previewLow1, previewDif1, previewHist1] = request.security(syminfo.tickerid, referenceTimeframe1, f_reference_source(), gaps = barmerge.gaps_off, lookahead = barmerge.lookahead_on)
+    [requestedTime1, requestedHigh1, requestedLow1, requestedDif1, requestedHist1] = request.security(syminfo.tickerid, referenceTimeframe1, f_reference_source(), gaps = barmerge.gaps_off, lookahead = barmerge.lookahead_on)
     referenceSourceTime1 := requestedTime1
     referenceSourceHigh1 := requestedHigh1
     referenceSourceLow1 := requestedLow1
     referenceSourceDif1 := requestedDif1
     referenceSourceHist1 := requestedHist1
-    referencePreviewTime1 := previewTime1
-    referencePreviewHigh1 := previewHigh1
-    referencePreviewLow1 := previewLow1
-    referencePreviewDif1 := previewDif1
-    referencePreviewHist1 := previewHist1
 
 int referenceSourceTime2 = na
 float referenceSourceHigh2 = na
 float referenceSourceLow2 = na
 float referenceSourceDif2 = na
 float referenceSourceHist2 = na
-int referencePreviewTime2 = na
-float referencePreviewHigh2 = na
-float referencePreviewLow2 = na
-float referencePreviewDif2 = na
-float referencePreviewHist2 = na
 if referenceEnabled2
-    [requestedTime2, requestedHigh2, requestedLow2, requestedDif2, requestedHist2, previewTime2, previewHigh2, previewLow2, previewDif2, previewHist2] = request.security(syminfo.tickerid, referenceTimeframe2, f_reference_source(), gaps = barmerge.gaps_off, lookahead = barmerge.lookahead_on)
+    [requestedTime2, requestedHigh2, requestedLow2, requestedDif2, requestedHist2] = request.security(syminfo.tickerid, referenceTimeframe2, f_reference_source(), gaps = barmerge.gaps_off, lookahead = barmerge.lookahead_on)
     referenceSourceTime2 := requestedTime2
     referenceSourceHigh2 := requestedHigh2
     referenceSourceLow2 := requestedLow2
     referenceSourceDif2 := requestedDif2
     referenceSourceHist2 := requestedHist2
-    referencePreviewTime2 := previewTime2
-    referencePreviewHigh2 := previewHigh2
-    referencePreviewLow2 := previewLow2
-    referencePreviewDif2 := previewDif2
-    referencePreviewHist2 := previewHist2
 
 int referenceSourceTime3 = na
 float referenceSourceHigh3 = na
 float referenceSourceLow3 = na
 float referenceSourceDif3 = na
 float referenceSourceHist3 = na
-int referencePreviewTime3 = na
-float referencePreviewHigh3 = na
-float referencePreviewLow3 = na
-float referencePreviewDif3 = na
-float referencePreviewHist3 = na
 if referenceEnabled3
-    [requestedTime3, requestedHigh3, requestedLow3, requestedDif3, requestedHist3, previewTime3, previewHigh3, previewLow3, previewDif3, previewHist3] = request.security(syminfo.tickerid, referenceTimeframe3, f_reference_source(), gaps = barmerge.gaps_off, lookahead = barmerge.lookahead_on)
+    [requestedTime3, requestedHigh3, requestedLow3, requestedDif3, requestedHist3] = request.security(syminfo.tickerid, referenceTimeframe3, f_reference_source(), gaps = barmerge.gaps_off, lookahead = barmerge.lookahead_on)
     referenceSourceTime3 := requestedTime3
     referenceSourceHigh3 := requestedHigh3
     referenceSourceLow3 := requestedLow3
     referenceSourceDif3 := requestedDif3
     referenceSourceHist3 := requestedHist3
-    referencePreviewTime3 := previewTime3
-    referencePreviewHigh3 := previewHigh3
-    referencePreviewLow3 := previewLow3
-    referencePreviewDif3 := previewDif3
-    referencePreviewHist3 := previewHist3
 
 int referenceSourceTime4 = na
 float referenceSourceHigh4 = na
 float referenceSourceLow4 = na
 float referenceSourceDif4 = na
 float referenceSourceHist4 = na
-int referencePreviewTime4 = na
-float referencePreviewHigh4 = na
-float referencePreviewLow4 = na
-float referencePreviewDif4 = na
-float referencePreviewHist4 = na
 if referenceEnabled4
-    [requestedTime4, requestedHigh4, requestedLow4, requestedDif4, requestedHist4, previewTime4, previewHigh4, previewLow4, previewDif4, previewHist4] = request.security(syminfo.tickerid, referenceTimeframe4, f_reference_source(), gaps = barmerge.gaps_off, lookahead = barmerge.lookahead_on)
+    [requestedTime4, requestedHigh4, requestedLow4, requestedDif4, requestedHist4] = request.security(syminfo.tickerid, referenceTimeframe4, f_reference_source(), gaps = barmerge.gaps_off, lookahead = barmerge.lookahead_on)
     referenceSourceTime4 := requestedTime4
     referenceSourceHigh4 := requestedHigh4
     referenceSourceLow4 := requestedLow4
     referenceSourceDif4 := requestedDif4
     referenceSourceHist4 := requestedHist4
-    referencePreviewTime4 := previewTime4
-    referencePreviewHigh4 := previewHigh4
-    referencePreviewLow4 := previewLow4
-    referencePreviewDif4 := previewDif4
-    referencePreviewHist4 := previewHist4
 
 var ReferenceEngine referenceEngine1 = f_new_reference_engine()
 var ReferenceEngine referenceEngine2 = f_new_reference_engine()
 var ReferenceEngine referenceEngine3 = f_new_reference_engine()
 var ReferenceEngine referenceEngine4 = f_new_reference_engine()
-var ReferenceEngine referencePreviewEngine1 = f_new_reference_engine()
-var ReferenceEngine referencePreviewEngine2 = f_new_reference_engine()
-var ReferenceEngine referencePreviewEngine3 = f_new_reference_engine()
-var ReferenceEngine referencePreviewEngine4 = f_new_reference_engine()
 referenceEngine1 := f_ingest_reference(referenceEnabled1, referenceSourceTime1, referenceSourceHigh1, referenceSourceLow1, referenceSourceDif1, referenceSourceHist1, time, referenceEngine1, true)
 referenceEngine2 := f_ingest_reference(referenceEnabled2, referenceSourceTime2, referenceSourceHigh2, referenceSourceLow2, referenceSourceDif2, referenceSourceHist2, time, referenceEngine2, true)
 referenceEngine3 := f_ingest_reference(referenceEnabled3, referenceSourceTime3, referenceSourceHigh3, referenceSourceLow3, referenceSourceDif3, referenceSourceHist3, time, referenceEngine3, true)
@@ -2273,7 +2203,7 @@ if confirmedRawBar and (na(lastProcessedRawIndex) or bar_index != lastProcessedR
         Fractal confirmedFractal = f_detect_confirmed_fractal(syntheticBars, time)
         if not na(confirmedFractal)
             array.push(baseFractals, confirmedFractal)
-            bool structuresChanged = f_update_strokes(syntheticBars, strokeEndpoints, strokes, confirmedFractal, macdHistValues, difValues, true)
+            bool structuresChanged = f_update_strokes(strokeEndpoints, strokes, confirmedFractal, macdHistValues, difValues, true)
             focusStructuresDirty := focusStructuresDirty or structuresChanged
 
 bool focusReplayDirty = confirmedRawBar and focusStructuresDirty
@@ -2336,7 +2266,7 @@ if barstate.islast
         if previewAppendedSynthetic
             Fractal previewFractal = f_detect_confirmed_fractal(viewSyntheticBars, na)
             if not na(previewFractal)
-                f_update_strokes(viewSyntheticBars, viewStrokeEndpoints, viewStrokes, previewFractal, viewMacdHistValues, viewDifValues, false)
+                f_update_strokes(viewStrokeEndpoints, viewStrokes, previewFractal, viewMacdHistValues, viewDifValues, false)
         f_extend_terminal_candidate(viewStrokes, bar_index, time, normalizedHigh, normalizedLow, viewMacdHistValues, viewDifValues)
 
     [currentTrendT0, currentTrendT1, currentTrendT2, currentTrendT3] = f_build_focus_hierarchy(viewStrokes, viewMacdHistValues, viewDifValues, segmentsS, movementsT0, movementsT1, movementsT2, movementsT3, centersT0, centersT1, centersT2, centersT3, divergencesT0, divergencesT1, divergencesT2, divergencesT3, pointsT0, pointsT1, pointsT2, pointsT3)
@@ -2346,27 +2276,6 @@ if barstate.islast
     trendT3 := currentTrendT3
     if na(reliableStartTime) and bar_index >= MACD_WARMUP_BARS and f_has_reliable_confirmed_center(segmentsS, MACD_WARMUP_BARS)
         reliableStartTime := time
-    if referenceEnabled1
-        referenceEngine1 := f_build_reference_engine(referenceEngine1)
-        referencePreviewEngine1 := f_copy_reference_engine(referenceEngine1)
-        referencePreviewEngine1 := f_ingest_reference(true, referencePreviewTime1, referencePreviewHigh1, referencePreviewLow1, referencePreviewDif1, referencePreviewHist1, time, referencePreviewEngine1, false)
-        referencePreviewEngine1 := f_build_reference_engine(referencePreviewEngine1)
-    if referenceEnabled2
-        referenceEngine2 := f_build_reference_engine(referenceEngine2)
-        referencePreviewEngine2 := f_copy_reference_engine(referenceEngine2)
-        referencePreviewEngine2 := f_ingest_reference(true, referencePreviewTime2, referencePreviewHigh2, referencePreviewLow2, referencePreviewDif2, referencePreviewHist2, time, referencePreviewEngine2, false)
-        referencePreviewEngine2 := f_build_reference_engine(referencePreviewEngine2)
-    if referenceEnabled3
-        referenceEngine3 := f_build_reference_engine(referenceEngine3)
-        referencePreviewEngine3 := f_copy_reference_engine(referenceEngine3)
-        referencePreviewEngine3 := f_ingest_reference(true, referencePreviewTime3, referencePreviewHigh3, referencePreviewLow3, referencePreviewDif3, referencePreviewHist3, time, referencePreviewEngine3, false)
-        referencePreviewEngine3 := f_build_reference_engine(referencePreviewEngine3)
-    if referenceEnabled4
-        referenceEngine4 := f_build_reference_engine(referenceEngine4)
-        referencePreviewEngine4 := f_copy_reference_engine(referenceEngine4)
-        referencePreviewEngine4 := f_ingest_reference(true, referencePreviewTime4, referencePreviewHigh4, referencePreviewLow4, referencePreviewDif4, referencePreviewHist4, time, referencePreviewEngine4, false)
-        referencePreviewEngine4 := f_build_reference_engine(referencePreviewEngine4)
-
     array.clear(currentStructureSnapshots)
     f_collect_focus_snapshots(currentStructureSnapshots, timeframe.period, viewStrokeEndpoints, viewStrokes, segmentsS, movementsT0, movementsT1, movementsT2, movementsT3, centersT0, centersT1, centersT2, centersT3, divergencesT0, divergencesT1, divergencesT2, divergencesT3, pointsT0, pointsT1, pointsT2, pointsT3, noLowerPointSources, trendT0, trendT1, trendT2, trendT3)
     if referenceEnabled1
@@ -2558,13 +2467,12 @@ f_point_triplet(array<BuySellPoint> points) =>
             class3Count += current.pointClass == 3 and current.confirmed ? 1 : 0
     str.tostring(class1Count) + "/" + str.tostring(class2Count) + "/" + str.tostring(class3Count)
 
-f_reference_summary(bool requested, bool enabled, string referenceTimeframe, ReferenceEngine engine, ReferenceEngine previewEngine) =>
+f_reference_summary(bool requested, bool enabled, string referenceTimeframe, ReferenceEngine engine) =>
     string result = requested ? (standardChart ? "不可用/截断" : "合成图表暂停") : "关闭"
     if enabled
         string unitCounts = str.tostring(array.size(engine.strokes)) + "/" + str.tostring(array.size(engine.segmentsS)) + "/" + str.tostring(array.size(engine.movementsT0))
         string pointCounts = f_point_triplet(engine.pointsT0) + "|" + f_point_triplet(engine.pointsT1) + "|" + f_point_triplet(engine.pointsT2)
-        string previewCounts = str.tostring(array.size(previewEngine.strokes)) + "/" + str.tostring(array.size(previewEngine.segmentsS)) + "/" + str.tostring(array.size(previewEngine.movementsT0))
-        result := referenceTimeframe + "·确K" + str.tostring(engine.state.nextIndex) + "·B/S/T0=" + unitCounts + "·P=" + pointCounts + "·预B/S/T0=" + previewCounts
+        result := referenceTimeframe + "·确K" + str.tostring(engine.state.nextIndex) + "·B/S/T0=" + unitCounts + "·P=" + pointCounts
     result
 
 f_evidence_summary(array<Evidence> ledger) =>
@@ -2942,13 +2850,13 @@ if barstate.islast
     string engineStatus = not standardChart ? "确认/参考均已停止" : barstate.isconfirmed ? "收盘确认状态" : "活动K候选预览·确认冻结"
     f_panel_cell(statusPanel, 1, 29, str.tostring(array.size(currentStructureSnapshots)) + " / " + str.tostring(array.size(lifecycleEvents)) + " · " + engineStatus, text_color = standardChart ? foregroundColor : warningColor)
     f_panel_cell(statusPanel, 0, 30, "参考 1", text_color = foregroundColor)
-    f_panel_cell(statusPanel, 1, 30, f_reference_summary(referenceRequested1, referenceEnabled1, referenceTimeframe1, referenceEngine1, referencePreviewEngine1), text_color = layer1Color)
+    f_panel_cell(statusPanel, 1, 30, f_reference_summary(referenceRequested1, referenceEnabled1, referenceTimeframe1, referenceEngine1), text_color = layer1Color)
     f_panel_cell(statusPanel, 0, 31, "参考 2", text_color = foregroundColor)
-    f_panel_cell(statusPanel, 1, 31, f_reference_summary(referenceRequested2, referenceEnabled2, referenceTimeframe2, referenceEngine2, referencePreviewEngine2), text_color = layer1Color)
+    f_panel_cell(statusPanel, 1, 31, f_reference_summary(referenceRequested2, referenceEnabled2, referenceTimeframe2, referenceEngine2), text_color = layer1Color)
     f_panel_cell(statusPanel, 0, 32, "参考 3", text_color = foregroundColor)
-    f_panel_cell(statusPanel, 1, 32, f_reference_summary(referenceRequested3, referenceEnabled3, referenceTimeframe3, referenceEngine3, referencePreviewEngine3), text_color = layer1Color)
+    f_panel_cell(statusPanel, 1, 32, f_reference_summary(referenceRequested3, referenceEnabled3, referenceTimeframe3, referenceEngine3), text_color = layer1Color)
     f_panel_cell(statusPanel, 0, 33, "参考 4", text_color = foregroundColor)
-    f_panel_cell(statusPanel, 1, 33, f_reference_summary(referenceRequested4, referenceEnabled4, referenceTimeframe4, referenceEngine4, referencePreviewEngine4), text_color = layer1Color)
+    f_panel_cell(statusPanel, 1, 33, f_reference_summary(referenceRequested4, referenceEnabled4, referenceTimeframe4, referenceEngine4), text_color = layer1Color)
     f_panel_cell(statusPanel, 0, 34, "活动证据", text_color = foregroundColor)
     f_panel_cell(statusPanel, 1, 34, f_evidence_summary(activeEvidence), text_color = foregroundColor)
     f_panel_cell(statusPanel, 0, 35, "层间共振", text_color = foregroundColor)

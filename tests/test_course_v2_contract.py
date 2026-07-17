@@ -15,16 +15,13 @@ class CourseV2ContractTest(unittest.TestCase):
         self.assertNotIn('"修订笔"', SOURCE)
         self.assertNotIn('"严格笔"', SOURCE)
 
-    def test_stroke_requires_both_distances_and_real_extreme(self) -> None:
+    def test_stroke_requires_both_distances_without_extra_raw_extreme_gate(self) -> None:
         self.assertIn("math.abs(newFractal.kPosition - lastEndpoint.kPosition) >= 3", SOURCE)
         self.assertIn("math.abs(newFractal.structureIndex - lastEndpoint.structureIndex) >= 4", SOURCE)
-        self.assertRegex(
-            SOURCE,
-            r"enoughSyntheticBars and enoughRawBars and f_is_real_extreme\(",
-        )
-        self.assertIn("float rawRangeHigh", SOURCE)
-        self.assertIn("float rawRangeLow", SOURCE)
-        self.assertIn("current.rawRangeHigh > startPoint.price", SOURCE)
+        self.assertIn("if enoughSyntheticBars and enoughRawBars and allowConfirmation", SOURCE)
+        self.assertNotIn("f_is_real_extreme", SOURCE)
+        self.assertNotIn("rawRangeHigh", SOURCE)
+        self.assertNotIn("rawRangeLow", SOURCE)
 
     def test_segments_keep_full_child_range(self) -> None:
         self.assertIn("f_children_range_high(lowerUnits, startChild, endpointChild - 1)", SOURCE)
@@ -83,6 +80,17 @@ class CourseV2ContractTest(unittest.TestCase):
         self.assertEqual(focus_levels, [("0", "0"), ("1", "1"), ("2", "2"), ("3", "3")])
         self.assertIn("engine.centersT2", SOURCE)
         self.assertNotIn("engine.centersT3", SOURCE)
+
+    def test_reference_requests_keep_only_confirmed_structure_state(self) -> None:
+        reference_source = re.search(
+            r"f_reference_source\(\) =>(?P<body>.*?)\n\nf_contains",
+            SOURCE,
+            flags=re.DOTALL,
+        )
+        self.assertIsNotNone(reference_source)
+        self.assertIn("time[1]", reference_source.group("body"))
+        self.assertNotIn("referencePreview", SOURCE)
+        self.assertNotIn("f_copy_reference_engine", SOURCE)
 
     def test_completion_requires_a_qualified_reverse_component(self) -> None:
         self.assertIn("f_is_qualified_reverse_component", SOURCE)
