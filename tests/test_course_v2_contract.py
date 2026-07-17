@@ -18,10 +18,30 @@ class CourseV2ContractTest(unittest.TestCase):
     def test_stroke_requires_both_distances_without_extra_raw_extreme_gate(self) -> None:
         self.assertIn("math.abs(newFractal.kPosition - lastEndpoint.kPosition) >= 3", SOURCE)
         self.assertIn("math.abs(newFractal.structureIndex - lastEndpoint.structureIndex) >= 4", SOURCE)
-        self.assertIn("if enoughSyntheticBars and enoughRawBars and allowConfirmation", SOURCE)
+        self.assertIn("if enoughSyntheticBars and enoughRawBars", SOURCE)
+        self.assertNotIn(
+            "if enoughSyntheticBars and enoughRawBars and allowConfirmation",
+            SOURCE,
+        )
         self.assertNotIn("f_is_real_extreme", SOURCE)
         self.assertNotIn("rawRangeHigh", SOURCE)
         self.assertNotIn("rawRangeLow", SOURCE)
+
+    def test_intrabar_opposite_fractal_creates_candidate_without_freezing_prefix(self) -> None:
+        stroke_builder = re.search(
+            r"f_update_strokes\(.*?\) =>(?P<body>.*?)\n\nf_extend_terminal_candidate",
+            SOURCE,
+            flags=re.DOTALL,
+        )
+        self.assertIsNotNone(stroke_builder)
+        body = stroke_builder.group("body")
+        self.assertIn("if strokeCount > 0 and allowConfirmation", body)
+        self.assertRegex(
+            body,
+            r"if enoughSyntheticBars and enoughRawBars[\s\S]*?"
+            r"if strokeCount > 0 and allowConfirmation[\s\S]*?"
+            r"array\.push\(strokes, nextStroke\)",
+        )
 
     def test_segments_keep_full_child_range(self) -> None:
         self.assertIn("f_children_range_high(lowerUnits, startChild, endpointChild - 1)", SOURCE)
@@ -107,6 +127,59 @@ class CourseV2ContractTest(unittest.TestCase):
         self.assertNotIn("expansionConfirmed or hasReverseProof", SOURCE)
         self.assertIn("promotion_does_not_bootstrap_parent_components", SOURCE)
 
+    def test_level_promotion_links_contained_trend_centers_independently(self) -> None:
+        promotion_builder = re.search(
+            r"f_link_center_promotions\(.*?\) =>(?P<body>.*?)\n\nf_is_qualified_reverse_component",
+            SOURCE,
+            flags=re.DOTALL,
+        )
+        self.assertIsNotNone(promotion_builder)
+        body = promotion_builder.group("body")
+        self.assertIn("for lowerIndex = 0 to lowerCount - 1", body)
+        self.assertIn(
+            "parent.startTime <= current.startTime and parent.endTime >= current.endTime",
+            body,
+        )
+        self.assertNotIn("if current.expansionCandidate", body)
+
+    def test_divergence_must_match_movement_kind_and_direction(self) -> None:
+        divergence_builder = re.search(
+            r"f_build_divergences\(.*?\) =>(?P<body>.*?)\n\nf_build_completed_movements",
+            SOURCE,
+            flags=re.DOTALL,
+        )
+        self.assertIsNotNone(divergence_builder)
+        divergence_body = divergence_builder.group("body")
+        self.assertIn("int trendDirection = 0", divergence_body)
+        self.assertIn(
+            "bool departureMatchesStructure = trendCenterCount == 1 or trendDirection == departureDirection",
+            divergence_body,
+        )
+        self.assertIn(
+            "if departureMatchesStructure and not na(enteringIndex)",
+            divergence_body,
+        )
+
+        trend_builder = re.search(
+            r"f_get_trend_state\(.*?\) =>(?P<body>.*?)\n\nf_unit_confirmation_time",
+            SOURCE,
+            flags=re.DOTALL,
+        )
+        self.assertIsNotNone(trend_builder)
+        trend_body = trend_builder.group("body")
+        self.assertIn(
+            "bool divergenceMatchesMovement = latest.kind == kind and latest.direction == direction",
+            trend_body,
+        )
+        self.assertIn(
+            "direction := current.leaveDirection != 0 ? current.leaveDirection : current.failedDeparture ? current.failedLeaveDirection : 0",
+            trend_body,
+        )
+        self.assertIn(
+            "latest.centerIndex == lastCenter and latest.valid and divergenceMatchesMovement",
+            trend_body,
+        )
+
     def test_lifecycle_history_is_append_only(self) -> None:
         self.assertIn('"replaced"', SOURCE)
         self.assertIn('"invalidated"', SOURCE)
@@ -160,6 +233,18 @@ class CourseV2ContractTest(unittest.TestCase):
         self.assertIn('"|sequence=" + str.tostring(sequence)', SOURCE)
         self.assertNotIn("f_lifecycle_occurrence", SOURCE)
         self.assertIn("old.reason != incoming.reason", SOURCE)
+
+    def test_lifecycle_replaces_disappeared_candidate_before_successor(self) -> None:
+        reconcile = re.search(
+            r"f_reconcile_lifecycle\(.*?\) =>(?P<body>.*?)\n\nf_upsert_evidence",
+            SOURCE,
+            flags=re.DOTALL,
+        )
+        self.assertIsNotNone(reconcile)
+        body = reconcile.group("body")
+        replaced_index = body.index('"candidate_no_longer_active"')
+        successor_index = body.index("if not initializing and currentCount > 0")
+        self.assertLess(replaced_index, successor_index)
 
     def test_lifecycle_sources_use_stable_structure_ids(self) -> None:
         self.assertIn("f_unit_structure_id", SOURCE)

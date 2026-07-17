@@ -535,9 +535,9 @@ f_update_strokes(array<Fractal> endpoints, array<Unit> strokes, Fractal newFract
         else
             bool enoughSyntheticBars = math.abs(newFractal.kPosition - lastEndpoint.kPosition) >= 3
             bool enoughRawBars = math.abs(newFractal.structureIndex - lastEndpoint.structureIndex) >= 4
-            if enoughSyntheticBars and enoughRawBars and allowConfirmation
+            if enoughSyntheticBars and enoughRawBars
                 int strokeCount = array.size(strokes)
-                if strokeCount > 0
+                if strokeCount > 0 and allowConfirmation
                     Unit previousStroke = array.get(strokes, strokeCount - 1)
                     previousStroke.confirmed := true
                     previousStroke.confirmationTime := newFractal.confirmationTime
@@ -879,35 +879,33 @@ f_build_centers(array<Unit> units, array<Center> centers, int layer) =>
 f_link_center_promotions(array<Center> lowerCenters, array<Center> higherCenters, array<Unit> higherComponents) =>
     int lowerCount = array.size(lowerCenters)
     int higherCount = array.size(higherCenters)
-    if lowerCount >= 2 and higherCount > 0
-        for lowerIndex = 1 to lowerCount - 1
+    if lowerCount > 0 and higherCount > 0
+        for lowerIndex = 0 to lowerCount - 1
             Center current = array.get(lowerCenters, lowerIndex)
-            if current.expansionCandidate
-                Center previous = array.get(lowerCenters, lowerIndex - 1)
-                for higherIndex = 0 to higherCount - 1
-                    Center parent = array.get(higherCenters, higherIndex)
-                    bool containsSources = parent.startTime <= previous.startTime and parent.endTime >= current.endTime
-                    bool hasThreeConfirmedSources = parent.confirmed and parent.lastOverlapChild >= parent.startChild + 2
-                    int lowerComponentCount = 0
-                    if hasThreeConfirmedSources and parent.startChild + 2 < array.size(higherComponents)
-                        for sourceIndex = parent.startChild to parent.startChild + 2
-                            Unit source = array.get(higherComponents, sourceIndex)
-                            lowerComponentCount += math.max(0, source.lastChild - source.firstChild + 1)
-                    bool hasNineLowerComponents = lowerComponentCount >= 9
-                    if hasThreeConfirmedSources and hasNineLowerComponents and containsSources
-                        Unit promotionProof = array.get(higherComponents, parent.startChild + 2)
-                        current.expansionConfirmed := true
-                        current.parentCenter := higherIndex
-                        current.promotionSourceFirst := parent.startChild
-                        current.promotionSourceSecond := parent.startChild + 1
-                        current.promotionSourceThird := parent.startChild + 2
-                        current.promotionConfirmationIndex := promotionProof.endIndex
-                        current.promotionConfirmationTime := na(parent.confirmationTime) ? (na(promotionProof.confirmationTime) ? promotionProof.endTime : promotionProof.confirmationTime) : parent.confirmationTime
-                        current.promotionConfirmationPrice := promotionProof.endPrice
-                        // promotion_does_not_bootstrap_parent_components: the parent
-                        // was already built only from independently completed movements.
-                        array.set(lowerCenters, lowerIndex, current)
-                        break
+            for higherIndex = 0 to higherCount - 1
+                Center parent = array.get(higherCenters, higherIndex)
+                bool containsSources = parent.startTime <= current.startTime and parent.endTime >= current.endTime
+                bool hasThreeConfirmedSources = parent.confirmed and parent.lastOverlapChild >= parent.startChild + 2
+                int lowerComponentCount = 0
+                if hasThreeConfirmedSources and parent.startChild + 2 < array.size(higherComponents)
+                    for sourceIndex = parent.startChild to parent.startChild + 2
+                        Unit source = array.get(higherComponents, sourceIndex)
+                        lowerComponentCount += math.max(0, source.lastChild - source.firstChild + 1)
+                bool hasNineLowerComponents = lowerComponentCount >= 9
+                if hasThreeConfirmedSources and hasNineLowerComponents and containsSources
+                    Unit promotionProof = array.get(higherComponents, parent.startChild + 2)
+                    current.expansionConfirmed := true
+                    current.parentCenter := higherIndex
+                    current.promotionSourceFirst := parent.startChild
+                    current.promotionSourceSecond := parent.startChild + 1
+                    current.promotionSourceThird := parent.startChild + 2
+                    current.promotionConfirmationIndex := promotionProof.endIndex
+                    current.promotionConfirmationTime := na(parent.confirmationTime) ? (na(promotionProof.confirmationTime) ? promotionProof.endTime : promotionProof.confirmationTime) : parent.confirmationTime
+                    current.promotionConfirmationPrice := promotionProof.endPrice
+                    // promotion_does_not_bootstrap_parent_components: the parent
+                    // was already built only from independently completed movements.
+                    array.set(lowerCenters, lowerIndex, current)
+                    break
 
 f_is_qualified_reverse_component(Unit proof, int trendLevel, int movementDirection) =>
     int expectedLayer = trendLevel - 1
@@ -941,32 +939,39 @@ f_build_divergences(array<Unit> units, array<Center> centers, array<Divergence> 
                 int departureDirection = activeDeparture ? currentCenter.leaveDirection : currentCenter.failedLeaveDirection
                 int departureChild = activeDeparture ? currentCenter.leaveChild : currentCenter.failedLeaveChild
                 int trendCenterCount = 1
+                int trendDirection = 0
                 if centerIndex >= 1
-                    for relationIndex = 1 to centerIndex
+                    for relationIndex = centerIndex to 1
                         Center relationPrevious = array.get(centers, relationIndex - 1)
                         Center relationCurrent = array.get(centers, relationIndex)
                         int relation = f_center_relation(relationPrevious, relationCurrent)
-                        if relation == departureDirection
+                        if trendDirection == 0 and relation != 0
+                            trendDirection := relation
+                            trendCenterCount := 2
+                        else if relation == trendDirection and relation != 0
                             trendCenterCount += 1
                         else
-                            trendCenterCount := 1
+                            break
+                bool departureMatchesStructure = trendCenterCount == 1 or trendDirection == departureDirection
                 int divergenceKind = trendCenterCount >= 2 ? 2 : 1
                 int comparisonCenter = divergenceKind == 2 ? centerIndex - 1 : na
                 int firstTrendCenter = math.max(0, centerIndex - trendCenterCount + 1)
                 Center trendStartCenter = array.get(centers, firstTrendCenter)
                 int enteringIndex = na
                 if currentCenter.startChild > 0
-                    for unitIndex = 0 to currentCenter.startChild - 1
+                    for unitIndex = currentCenter.startChild - 1 to 0
                         Unit possibleEntering = array.get(units, unitIndex)
                         if possibleEntering.direction == departureDirection
                             enteringIndex := unitIndex
+                            break
                 int firstEnteringIndex = na
                 int comparisonStartChild = divergenceKind == 2 and comparisonCenter >= 0 ? array.get(centers, comparisonCenter).startChild : trendStartCenter.startChild
                 if comparisonStartChild > 0
-                    for unitIndex = 0 to comparisonStartChild - 1
+                    for unitIndex = comparisonStartChild - 1 to 0
                         Unit possibleFirstEntering = array.get(units, unitIndex)
                         if possibleFirstEntering.direction == departureDirection
                             firstEnteringIndex := unitIndex
+                            break
 
                 bool confirmedThirdPoint = false
                 int thirdPointIndex = na
@@ -990,7 +995,7 @@ f_build_divergences(array<Unit> units, array<Center> centers, array<Divergence> 
                         leavingIndex := na
 
                 bool traceableTrend = divergenceKind == 1 or (comparisonCenter >= 0 and not na(firstEnteringIndex) and confirmedThirdPoint and not na(leavingIndex))
-                if not na(enteringIndex) and not na(leavingIndex) and traceableTrend
+                if departureMatchesStructure and not na(enteringIndex) and not na(leavingIndex) and traceableTrend
                     Unit entering = array.get(units, enteringIndex)
                     Unit leaving = array.get(units, leavingIndex)
                     bool weakerArea = entering.macdArea > 0 and leaving.macdArea < entering.macdArea
@@ -1098,7 +1103,7 @@ f_get_trend_state(array<Center> centers, array<Divergence> divergences, array<Un
         firstCenter := centerCount - 1
         lastCenter := centerCount - 1
         Center last = array.get(centers, lastCenter)
-        direction := last.leaveDirection
+        direction := last.leaveDirection != 0 ? last.leaveDirection : last.failedDeparture ? last.failedLeaveDirection : 0
         status := last.confirmed ? MOVEMENT_QUALIFIED : MOVEMENT_FORMING
         if centerCount >= 2
             int sequenceDirection = 0
@@ -1120,12 +1125,13 @@ f_get_trend_state(array<Center> centers, array<Divergence> divergences, array<Un
                     sequenceCount := 1
                     firstCenter := i
                     lastCenter := i
-                    direction := current.leaveDirection
+                    direction := current.leaveDirection != 0 ? current.leaveDirection : current.failedDeparture ? current.failedLeaveDirection : 0
             kind := sequenceCount >= 2 ? 2 : 1
         int divergenceCount = array.size(divergences)
         if divergenceCount > 0
             Divergence latest = array.get(divergences, divergenceCount - 1)
-            completionCandidate := latest.centerIndex == lastCenter and latest.valid
+            bool divergenceMatchesMovement = latest.kind == kind and latest.direction == direction
+            completionCandidate := latest.centerIndex == lastCenter and latest.valid and divergenceMatchesMovement
             if completionCandidate
                 status := MOVEMENT_COMPLETION_CANDIDATE
                 int movementCount = array.size(completedMovements)
@@ -1542,6 +1548,15 @@ f_reconcile_lifecycle(array<StructureSnapshot> previous, array<StructureSnapshot
             StructureSnapshot incoming = array.get(current, currentIndex)
             f_append_lifecycle_event(events, incoming, incoming.state, incoming.reason)
 
+    int previousCount = array.size(previous)
+    if previousCount > 0
+        for previousIndex = 0 to previousCount - 1
+            StructureSnapshot old = array.get(previous, previousIndex)
+            int activeIndex = map.get(currentIndexBySlot, old.slotId)
+            bool stillActive = not na(activeIndex)
+            if not stillActive and old.state == "candidate"
+                f_append_lifecycle_event(events, old, "replaced", "candidate_no_longer_active")
+
     if not initializing and currentCount > 0
         for currentIndex = 0 to currentCount - 1
             StructureSnapshot incoming = array.get(current, currentIndex)
@@ -1558,15 +1573,6 @@ f_reconcile_lifecycle(array<StructureSnapshot> previous, array<StructureSnapshot
                     f_append_lifecycle_event(events, incoming, incoming.state, incoming.reason)
                 else if old.reason != incoming.reason
                     f_append_lifecycle_event(events, incoming, incoming.state, incoming.reason)
-
-    int previousCount = array.size(previous)
-    if previousCount > 0
-        for previousIndex = 0 to previousCount - 1
-            StructureSnapshot old = array.get(previous, previousIndex)
-            int activeIndex = map.get(currentIndexBySlot, old.slotId)
-            bool stillActive = not na(activeIndex)
-            if not stillActive and old.state == "candidate"
-                f_append_lifecycle_event(events, old, "replaced", "candidate_no_longer_active")
 
     array.clear(previous)
     if currentCount > 0
