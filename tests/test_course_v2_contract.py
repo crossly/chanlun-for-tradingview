@@ -390,6 +390,14 @@ class CourseV2ContractTest(unittest.TestCase):
         self.assertIn('"\\n离开失败: "', SOURCE)
         self.assertIn("+ departureText + promotionText", SOURCE)
 
+    def test_operation_level_view_selects_one_structural_layer(self) -> None:
+        self.assertIn('string operationLevel = input.string("自动", "操作级别"', SOURCE)
+        self.assertIn('"自动", "T0", "T1", "T2", "T3"', SOURCE)
+        self.assertIn("int operationLayer = operationLevel == \"自动\" ? automaticOperationLayer", SOURCE)
+        self.assertIn('"操作结构"', SOURCE)
+        self.assertIn('"操作点位"', SOURCE)
+        self.assertIn("operationLabel + \"·\" + operationTrend + \" | \" + operationDivergence", SOURCE)
+
 
 
 if __name__ == "__main__":
