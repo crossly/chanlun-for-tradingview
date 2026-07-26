@@ -28,10 +28,16 @@ int MOVEMENT_COMPLETION_CANDIDATE = 2
 int MOVEMENT_COMPLETED = 3
 int MOVEMENT_COMPLETED_BY_REVERSE = 1
 int MOVEMENT_COMPLETED_BY_PROMOTION = 2
+int EXECUTION_DATA_INSUFFICIENT = 0
+int EXECUTION_OBSERVE = 1
+int EXECUTION_WAIT_CONFIRMATION = 2
+int EXECUTION_READY = 3
+int EXECUTION_CONFLICT = 4
 
 string viewPreset = input.string("标准", "显示预设", options = ["交易", "简洁", "标准", "研究"], group = GROUP_VIEW)
 string colorTheme = input.string("TradingView", "颜色主题", options = ["TradingView", "中国市场", "色觉友好"], group = GROUP_VIEW)
 int detailBars = input.int(2000, "详细绘图窗口", minval = 300, maxval = 5000, step = 100, group = GROUP_VIEW)
+string tradingPanelPosition = input.string("左中", "交易面板位置", options = ["左上", "左中", "左下", "右上", "右中", "右下"], group = GROUP_VIEW)
 
 bool showCandidates = input.bool(true, "候选结构", group = GROUP_DISPLAY, inline = "state")
 bool showScenarios = input.bool(true, "情景推演", group = GROUP_DISPLAY, inline = "state")
@@ -246,6 +252,15 @@ type Evidence
     string movementContext
     string eventId
 
+
+type ExecutionState
+    int status
+    int direction
+    int primaryEvidenceIndex
+    int sameContextConflictCount
+    float confirmationPrice
+    float invalidationPrice
+    float riskDistance
 type Resonance
     int scope
     int market
@@ -1883,8 +1898,7 @@ f_build_scenarios(array<Unit> units, array<Center> centers, TrendState trend, in
         else if currentCenter.leaveState == 1
             int leaveDirection = currentCenter.leaveDirection
             float returnBoundary = leaveDirection == 1 ? currentCenter.zg : currentCenter.zd
-            float departureExtreme = leaveDirection == 1 ? currentCenter.gg : currentCenter.dd
-            f_add_scenario(scenarios, previousScenarios, layer, 1, -leaveDirection, currentCenter.endIndex, currentCenter.endTime, anchorPrice, returnBoundary, departureExtreme, "离开回归", "反向回试重新进入固定核心", "回试保持核心外侧则离开获得确认")
+            f_add_scenario(scenarios, previousScenarios, layer, 1, -leaveDirection, currentCenter.endIndex, currentCenter.endTime, anchorPrice, returnBoundary, leaveDirection == 1 ? currentCenter.gg : currentCenter.dd, "离开回归", "反向回试重新进入固定核心", "回试保持核心外侧则离开获得确认")
             f_add_scenario(scenarios, previousScenarios, layer, 2, leaveDirection, currentCenter.endIndex, currentCenter.endTime, anchorPrice, returnBoundary, leaveDirection == 1 ? currentCenter.zd : currentCenter.zg, "离开确认", "首次完整回试保持在核心外侧", "回试重新进入核心则本分支撤销")
         else
             int leaveDirection = currentCenter.leaveDirection
@@ -2478,9 +2492,9 @@ f_center_summary(array<Center> centers) =>
 f_trend_summary(TrendState state) =>
     string result = "未形成"
     if not na(state) and state.kind > 0
-        string kind = state.kind == 2 ? "趋势" : "盘整"
+        string kind = state.kind == 2 ? "趋势资格" : "盘整资格"
         string direction = state.direction == 1 ? "上" : state.direction == -1 ? "下" : "待定"
-        string status = state.status == MOVEMENT_COMPLETED ? "已完成" : state.status == MOVEMENT_COMPLETION_CANDIDATE ? "完成候选" : state.status == MOVEMENT_QUALIFIED ? "已具备" : "形成中"
+        string status = state.status == MOVEMENT_COMPLETED ? "已完成" : state.status == MOVEMENT_COMPLETION_CANDIDATE ? "完成候选" : state.status == MOVEMENT_QUALIFIED ? "未完成" : "形成中"
         string proof = state.status == MOVEMENT_COMPLETED and state.completionProof == MOVEMENT_COMPLETED_BY_PROMOTION ? "·升级确认" : state.status == MOVEMENT_COMPLETED ? "·反向确认" : ""
         result := kind + direction + "·" + str.tostring(state.centerCount) + "枢·" + status + proof
     result
@@ -2634,6 +2648,76 @@ f_trade_signal_summary(array<Evidence> ledger) =>
                 latestPriority := priority
     [result, resultDirection, resultConfirmed]
 
+f_build_execution_state(array<Evidence> ledger, bool reliable, bool resourceClipped) =>
+    ExecutionState result = ExecutionState.new(EXECUTION_DATA_INSUFFICIENT, 0, na, 0, na, na, na)
+    if reliable and not resourceClipped
+        result.status := EXECUTION_OBSERVE
+        int primaryIndex = na
+        int primaryPriority = -1
+        int primaryKnownTime = na
+        int evidenceCount = array.size(ledger)
+        if evidenceCount > 0
+            for evidenceIndex = 0 to evidenceCount - 1
+                Evidence evidence = array.get(ledger, evidenceIndex)
+                int priority = evidence.confirmed ? 1 : 0
+                if evidence.kind >= 11
+                    priority += 2
+                bool preferred = na(primaryIndex) or evidence.knownTime > primaryKnownTime or (evidence.knownTime == primaryKnownTime and priority > primaryPriority)
+                if preferred
+                    primaryIndex := evidenceIndex
+                    primaryPriority := priority
+                    primaryKnownTime := evidence.knownTime
+        if not na(primaryIndex)
+            Evidence primary = array.get(ledger, primaryIndex)
+            float riskDistance = not na(primary.confirmationPrice) and not na(primary.invalidationPrice) ? math.abs(primary.confirmationPrice - primary.invalidationPrice) : na
+            result := ExecutionState.new(EXECUTION_WAIT_CONFIRMATION, primary.direction, primaryIndex, 0, primary.confirmationPrice, primary.invalidationPrice, riskDistance)
+            bool executablePoint = primary.confirmed and primary.kind >= 11 and not primary.invalidationCandidate
+            if executablePoint
+                int conflicts = 0
+                for evidenceIndex = 0 to evidenceCount - 1
+                    Evidence candidate = array.get(ledger, evidenceIndex)
+                    bool sameContext = candidate.marketTimeframe == primary.marketTimeframe and candidate.layer == primary.layer
+                    if sameContext and candidate.confirmed and candidate.direction == -primary.direction
+                        conflicts += 1
+                result := ExecutionState.new(conflicts > 0 ? EXECUTION_CONFLICT : EXECUTION_READY, primary.direction, primaryIndex, conflicts, primary.confirmationPrice, primary.invalidationPrice, riskDistance)
+    result
+
+f_execution_status_summary(ExecutionState state) =>
+    state.status == EXECUTION_DATA_INSUFFICIENT ? "数据不足" : state.status == EXECUTION_OBSERVE ? "观察" : state.status == EXECUTION_WAIT_CONFIRMATION ? "等待确认" : state.status == EXECUTION_READY ? "结构可执行" : "结构冲突"
+
+f_execution_primary_summary(ExecutionState state, array<Evidence> ledger) =>
+    string result = "无活动证据"
+    if not na(state.primaryEvidenceIndex) and state.primaryEvidenceIndex >= 0 and state.primaryEvidenceIndex < array.size(ledger)
+        Evidence primary = array.get(ledger, state.primaryEvidenceIndex)
+        string kindText = primary.kind == 1 ? "盘背" : primary.kind == 2 ? "趋背" : primary.kind == 11 ? "1类" : primary.kind == 12 ? "2类" : "3类"
+        result := kindText + (primary.direction == 1 ? "买" : "卖") + "·" + primary.marketTimeframe + "·T" + str.tostring(primary.layer) + "·" + (primary.confirmed ? "确认" : "候选")
+    result
+
+f_execution_risk_summary(ExecutionState state) =>
+    if state.status == EXECUTION_DATA_INSUFFICIENT
+        "未评估"
+    else if na(state.invalidationPrice)
+        "失效边界待定"
+    else
+        "失效 " + str.tostring(state.invalidationPrice, format.mintick) + (na(state.riskDistance) ? "" : " · 距离 " + str.tostring(state.riskDistance, format.mintick))
+
+f_execution_tooltip(ExecutionState state, array<Evidence> ledger) =>
+    string result = "交易状态仅整合已计算结构；不构成仓位、收益或自动下单建议。"
+    if state.status == EXECUTION_DATA_INSUFFICIENT
+        result := "标准图表、可靠起点和绘图资源必须同时满足，才评估交易状态。"
+    else if state.status == EXECUTION_OBSERVE
+        result := "当前没有活动结构证据。"
+    else if not na(state.primaryEvidenceIndex) and state.primaryEvidenceIndex >= 0 and state.primaryEvidenceIndex < array.size(ledger)
+        Evidence primary = array.get(ledger, state.primaryEvidenceIndex)
+        result := "事件: " + primary.eventId + "\n结构时间: " + str.format_time(primary.structureTime, "yyyy-MM-dd HH:mm") + "\n确认时间: " + (na(primary.confirmationTime) ? "待确认" : str.format_time(primary.confirmationTime, "yyyy-MM-dd HH:mm")) + "\n失效边界: " + str.tostring(primary.invalidationPrice, format.mintick)
+        if state.status == EXECUTION_WAIT_CONFIRMATION
+            result += primary.invalidationCandidate ? "\n当前触及失效边界，等待结构确认。" : "\n候选、背驰或未完成买卖点不进入可执行状态。"
+        else if state.status == EXECUTION_CONFLICT
+            result += "\n同 TF、同 Tn 已确认反向证据: " + str.tostring(state.sameContextConflictCount) + " 项。"
+        else if state.status == EXECUTION_READY
+            result += "\n已确认、有效的买卖点；同 TF、同 Tn 无已确认反向证据。"
+
+
 f_draw_centers(array<Center> centers, array<box> boxes, array<label> labels, color layerColor, int maxDraw, int detailBars, bool showWave) =>
     int centerCount = array.size(centers)
     if centerCount > 0 and maxDraw > 0
@@ -2653,7 +2737,8 @@ f_draw_centers(array<Center> centers, array<box> boxes, array<label> labels, col
                 string stateText = current.expansionConfirmed ? "升确" : current.leaveState == 2 ? "离确" : current.leaveState == 1 ? "离候" : current.failedDeparture ? "离败" : visualConfirmed ? "延" : "延候"
                 string centerText = "Z·T" + str.tostring(current.layer) + "·" + stateText
                 string promotionText = current.expansionConfirmed ? "\n高级中枢: T" + str.tostring(current.layer + 1) + " #" + str.tostring(current.parentCenter) + "\n三走势来源: " + str.tostring(current.promotionSourceFirst) + "/" + str.tostring(current.promotionSourceSecond) + "/" + str.tostring(current.promotionSourceThird) : current.expansionCandidate ? "\n高级中枢: 仅扩展候选，等待三走势确认来源" : ""
-                string centerTooltip = "中枢核心 ZD/ZG: " + str.tostring(current.zd, format.mintick) + " / " + str.tostring(current.zg, format.mintick) + "\n波动 DD/GG: " + str.tostring(current.dd, format.mintick) + " / " + str.tostring(current.gg, format.mintick) + "\n来源单元: " + str.tostring(current.startChild) + ".." + str.tostring(current.endChild) + promotionText
+                string departureText = current.leaveState == 2 ? "\n离开确认: " + (current.leaveDirection == 1 ? "上" : "下") + "#" + str.tostring(current.leaveChild) + "·回试#" + str.tostring(current.retestChild) : current.leaveState == 1 ? "\n离开候选: " + (current.leaveDirection == 1 ? "上" : "下") + "#" + str.tostring(current.leaveChild) : current.failedDeparture ? "\n离开失败: " + (current.failedLeaveDirection == 1 ? "上" : "下") + "#" + str.tostring(current.failedLeaveChild) : "\n离开: 延伸"
+                string centerTooltip = "中枢核心 ZD/ZG: " + str.tostring(current.zd, format.mintick) + " / " + str.tostring(current.zg, format.mintick) + "\n波动 DD/GG: " + str.tostring(current.dd, format.mintick) + " / " + str.tostring(current.gg, format.mintick) + "\n来源单元: " + str.tostring(current.startChild) + ".." + str.tostring(current.endChild) + departureText + promotionText
                 if array.size(labels) < 480
                     label centerLabel = label.new(current.endIndex, current.zg, centerText, xloc = xloc.bar_index, style = label.style_label_left, color = color.new(centerColor, 74), textcolor = foregroundColor, size = size.tiny, tooltip = centerTooltip)
                     array.push(labels, centerLabel)
@@ -2674,7 +2759,8 @@ f_draw_divergences(array<Divergence> divergences, array<label> labels, color lay
                 string stateText = current.confirmed ? "确" : "候"
                 string divergenceText = compactTrading ? kindText + (current.direction == 1 ? "卖" : "买") + "·T" + str.tostring(current.layer) : kindText + "·T" + str.tostring(current.layer) + "·" + stateText
                 string difText = current.difWeaker ? "减弱" : "未减弱"
-                string divergenceTooltip = "MACD 同向面积: " + str.tostring(current.enteringArea, "#.####") + " -> " + str.tostring(current.leavingArea, "#.####") + "\n面积比: " + str.tostring(current.areaRatio, "#.###") + "\nDIF 极值: " + difText + "\n结构时间: " + str.format_time(current.structureTime, "yyyy-MM-dd HH:mm") + (current.confirmed ? "\n确认时间: " + str.format_time(current.confirmationTime, "yyyy-MM-dd HH:mm") : "")
+                string usageText = current.kind == 2 ? "趋势完成候选，等待反向确认" : "单中枢减弱，不直接确认一类点"
+                string divergenceTooltip = "MACD 同向面积: " + str.tostring(current.enteringArea, "#.####") + " -> " + str.tostring(current.leavingArea, "#.####") + "\n面积比: " + str.tostring(current.areaRatio, "#.###") + "\nDIF 极值: " + difText + "\n解释: " + usageText + "\n结构时间: " + str.format_time(current.structureTime, "yyyy-MM-dd HH:mm") + (current.confirmed ? "\n确认时间: " + str.format_time(current.confirmationTime, "yyyy-MM-dd HH:mm") : "")
                 string divergenceStyle = current.direction == 1 ? label.style_label_down : label.style_label_up
                 label divergenceLabel = label.new(current.structureIndex, current.structurePrice, divergenceText, xloc = xloc.bar_index, style = divergenceStyle, color = color.new(divergenceColor, current.confirmed ? 18 : 55), textcolor = foregroundColor, size = compactTrading ? size.small : size.tiny, tooltip = divergenceTooltip)
                 array.push(labels, divergenceLabel)
@@ -2700,7 +2786,8 @@ f_draw_points(array<BuySellPoint> points, array<line> lines, array<label> labels
                     string pointText = compactTrading ? str.tostring(current.pointClass) + (current.direction == 1 ? "买" : "卖") + "·T" + str.tostring(current.layer) : str.tostring(current.pointClass) + sideText + "·T" + str.tostring(current.layer)
                     string pointStatus = not current.confirmed ? "候选" : current.valid ? (current.invalidationCandidate ? "失效候选" : "有效") : "已失效"
                     string delayText = na(current.confirmationDelayBars) ? "待确认" : str.tostring(current.confirmationDelayBars) + " K"
-                    string pointTooltip = "身份: " + str.tostring(current.pointClass) + " 类" + (current.direction == 1 ? "买点" : "卖点") + "\n状态: " + pointStatus + "\n结构价: " + str.tostring(current.structurePrice, format.mintick) + "\n结构时间: " + str.format_time(current.structureTime, "yyyy-MM-dd HH:mm") + (current.confirmed ? "\n确认价: " + str.tostring(current.confirmationPrice, format.mintick) + "\n确认时间: " + str.format_time(current.confirmationTime, "yyyy-MM-dd HH:mm") + "\n确认延迟: " + delayText : "") + "\n失效边界: " + str.tostring(current.invalidationPrice, format.mintick)
+                    string causeText = current.pointClass == 1 ? "趋背#" + str.tostring(current.sourceDivergence) + "·枢#" + str.tostring(current.sourceCenter) : current.pointClass == 2 ? "1点#" + str.tostring(current.linkedFirstPoint) + "·" + (current.relativePosition > 0 ? "强" : current.relativePosition < 0 ? "弱" : "等位") : "枢#" + str.tostring(current.sourceCenter) + "·首回试"
+                    string pointTooltip = "身份: " + str.tostring(current.pointClass) + " 类" + (current.direction == 1 ? "买点" : "卖点") + "\n状态: " + pointStatus + "\n因果: " + causeText + "\n结构价: " + str.tostring(current.structurePrice, format.mintick) + "\n结构时间: " + str.format_time(current.structureTime, "yyyy-MM-dd HH:mm") + (current.confirmed ? "\n确认价: " + str.tostring(current.confirmationPrice, format.mintick) + "\n确认时间: " + str.format_time(current.confirmationTime, "yyyy-MM-dd HH:mm") + "\n确认延迟: " + delayText : "") + "\n失效边界: " + str.tostring(current.invalidationPrice, format.mintick)
                     string pointStyle = current.direction == 1 ? label.style_label_up : label.style_label_down
                     label pointLabel = label.new(current.structureTime, current.structurePrice, pointText, xloc = xloc.bar_time, style = pointStyle, color = color.new(pointColor, current.confirmed ? 8 : 48), textcolor = foregroundColor, size = compactTrading ? size.small : size.tiny, tooltip = pointTooltip)
                     array.push(labels, pointLabel)
@@ -2838,6 +2925,8 @@ f_panel_cell(table panel, int column, int row, string cellText, color text_color
 var table statusPanel = table.new(position.top_right, 2, 42, border_width = 1)
 
 if barstate.islast
+    string panelPosition = not tradingView ? position.top_right : tradingPanelPosition == "左上" ? position.top_left : tradingPanelPosition == "左中" ? position.middle_left : tradingPanelPosition == "左下" ? position.bottom_left : tradingPanelPosition == "右上" ? position.top_right : tradingPanelPosition == "右中" ? position.middle_right : position.bottom_right
+    table.set_position(statusPanel, panelPosition)
     f_panel_cell(statusPanel, 0, 0, "严格递归缠论", bgcolor = color.new(foregroundColor, 85), text_color = foregroundColor)
     f_panel_cell(statusPanel, 1, 0, "Pine v6", bgcolor = color.new(foregroundColor, 85), text_color = foregroundColor)
     f_panel_cell(statusPanel, 0, 1, "焦点周期", text_color = foregroundColor)
@@ -2940,30 +3029,41 @@ if barstate.islast
     f_panel_cell(statusPanel, 0, 41, "计算/资源", text_color = foregroundColor)
     string resourceStatus = pointHistoryClipped ? "历史点预算裁剪" : nearObjectLimit ? "几何已主动裁剪" : "预算正常"
     f_panel_cell(statusPanel, 1, 41, "焦T0-3·参T0-2·" + resourceStatus, text_color = resourceClipped ? warningColor : foregroundColor)
+    bool executionReliable = standardChart and warmedUp and not na(reliableStartTime)
+    ExecutionState executionState = f_build_execution_state(activeEvidence, executionReliable, resourceClipped)
+    bool crossTimeframeOpposition = false
+    int resonanceCount = array.size(activeResonances)
+    if executionState.direction != 0 and resonanceCount > 0
+        for resonanceIndex = 0 to resonanceCount - 1
+            Resonance resonance = array.get(activeResonances, resonanceIndex)
+            if resonance.scope == 2 and resonance.confirmed and resonance.direction == -executionState.direction
+                crossTimeframeOpposition := true
+                break
+    string executionStateText = f_execution_status_summary(executionState) + (crossTimeframeOpposition ? " · 跨周期反向确认" : "")
 
     if not showStatusPanel
         table.clear(statusPanel, 0, 0, 1, 41)
     else if tradingView
         table.clear(statusPanel, 0, 0, 1, 41)
-        [tradeSignalText, tradeSignalDirection, tradeSignalConfirmed] = f_trade_signal_summary(activeEvidence)
-        color tradeSignalColor = tradeSignalDirection == 1 ? upColor : tradeSignalDirection == -1 ? downColor : foregroundColor
-        f_panel_cell(statusPanel, 0, 0, "交易视图", bgcolor = color.new(foregroundColor, 85), text_color = foregroundColor)
-        f_panel_cell(statusPanel, 1, 0, timeframe.period + "·" + THEORY_VERSION, bgcolor = color.new(foregroundColor, 85), text_color = foregroundColor)
-        f_panel_cell(statusPanel, 0, 1, "当前信号", text_color = foregroundColor)
-        f_panel_cell(statusPanel, 1, 1, tradeSignalText, text_color = tradeSignalConfirmed ? tradeSignalColor : candidateColor)
-        f_panel_cell(statusPanel, 0, 2, "T0 / T1 走势", text_color = foregroundColor)
-        f_panel_cell(statusPanel, 1, 2, f_trend_summary(trendT0) + " | " + f_trend_summary(trendT1), text_color = layer1Color)
-        f_panel_cell(statusPanel, 0, 3, "层间 / 跨周期", text_color = foregroundColor)
-        f_panel_cell(statusPanel, 1, 3, f_resonance_summary(activeResonances, 1) + " | " + f_resonance_summary(activeResonances, 2), text_color = layer2Color)
-        f_panel_cell(statusPanel, 0, 4, "区间套", text_color = foregroundColor)
-        f_panel_cell(statusPanel, 1, 4, f_nesting_summary(nestingState), text_color = layer3Color, tooltip = f_nesting_tooltip(nestingState))
-        f_panel_cell(statusPanel, 0, 5, "活动证据", text_color = foregroundColor)
-        f_panel_cell(statusPanel, 1, 5, f_evidence_summary(activeEvidence), text_color = foregroundColor)
-        f_panel_cell(statusPanel, 0, 6, "参考周期", text_color = foregroundColor)
-        f_panel_cell(statusPanel, 1, 6, str.tostring(activeReferenceCount) + "/4 已确认", text_color = foregroundColor)
-        f_panel_cell(statusPanel, 0, 7, "可靠起点", text_color = foregroundColor)
-        f_panel_cell(statusPanel, 1, 7, reliableDate, text_color = na(reliableStartTime) ? warningColor : foregroundColor)
-        f_panel_cell(statusPanel, 0, 8, "计算 / 资源", text_color = foregroundColor)
-        f_panel_cell(statusPanel, 1, 8, highestLayer + "·" + resourceStatus, text_color = resourceClipped ? warningColor : foregroundColor)
+        color executionColor = executionState.status == EXECUTION_READY ? (executionState.direction == 1 ? upColor : downColor) : executionState.status == EXECUTION_CONFLICT or executionState.status == EXECUTION_DATA_INSUFFICIENT ? warningColor : candidateColor
+        f_panel_cell(statusPanel, 0, 1, "结构状态", text_color = foregroundColor)
+        f_panel_cell(statusPanel, 1, 1, executionStateText, text_color = executionColor, tooltip = f_execution_tooltip(executionState, activeEvidence) + (crossTimeframeOpposition ? "\n跨周期存在已确认的反向共振；它不改写当前结构身份。" : ""))
+        f_panel_cell(statusPanel, 0, 2, "主要证据", text_color = foregroundColor)
+        f_panel_cell(statusPanel, 1, 2, f_execution_primary_summary(executionState, activeEvidence), text_color = executionColor, tooltip = f_execution_tooltip(executionState, activeEvidence))
+        f_panel_cell(statusPanel, 0, 3, "T0 / T1 走势", text_color = foregroundColor)
+        f_panel_cell(statusPanel, 1, 3, f_trend_summary(trendT0) + " | " + f_trend_summary(trendT1), text_color = layer1Color)
+        f_panel_cell(statusPanel, 0, 4, "同 TF 同 Tn 冲突", text_color = foregroundColor)
+        f_panel_cell(statusPanel, 1, 4, executionState.sameContextConflictCount > 0 ? str.tostring(executionState.sameContextConflictCount) + " 项反向确认" : "无", text_color = executionState.sameContextConflictCount > 0 ? warningColor : foregroundColor)
+        f_panel_cell(statusPanel, 0, 5, "层间 / 跨周期", text_color = foregroundColor)
+        f_panel_cell(statusPanel, 1, 5, f_resonance_summary(activeResonances, 1) + " | " + f_resonance_summary(activeResonances, 2), text_color = layer2Color)
+        f_panel_cell(statusPanel, 0, 6, "区间套", text_color = foregroundColor)
+        f_panel_cell(statusPanel, 1, 6, f_nesting_summary(nestingState), text_color = layer3Color, tooltip = f_nesting_tooltip(nestingState))
+        f_panel_cell(statusPanel, 0, 7, "失效 / 风险距离", text_color = foregroundColor)
+        f_panel_cell(statusPanel, 1, 7, f_execution_risk_summary(executionState), text_color = executionColor, tooltip = "风险距离仅为确认价与结构失效边界的价格距离；不表示仓位或收益。")
+        f_panel_cell(statusPanel, 0, 8, "可靠性", text_color = foregroundColor)
+        f_panel_cell(statusPanel, 1, 8, reliableDate + " · " + resourceStatus, text_color = executionReliable and not resourceClipped ? foregroundColor : warningColor)
+        for panelRow = 0 to 8
+            table.cell_set_text_size(statusPanel, 0, panelRow, size.small)
+            table.cell_set_text_size(statusPanel, 1, panelRow, size.small)
 
 plot(normalizedClose, "标准价格锚", color = color.new(foregroundColor, 100), display = display.none)

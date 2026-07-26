@@ -323,6 +323,74 @@ class CourseV2ContractTest(unittest.TestCase):
         self.assertIsNotNone(more_extreme_branch)
         self.assertNotIn("changed := true", more_extreme_branch.group("branch"))
 
+    def test_execution_policy_derives_state_without_changing_structure_truth(self) -> None:
+        for constant in (
+            "EXECUTION_DATA_INSUFFICIENT",
+            "EXECUTION_OBSERVE",
+            "EXECUTION_WAIT_CONFIRMATION",
+            "EXECUTION_READY",
+            "EXECUTION_CONFLICT",
+        ):
+            self.assertIn(f"int {constant}", SOURCE)
+
+        builder = re.search(
+            r"f_build_execution_state\(.*?\) =>(?P<body>.*?)\n\nf_execution_status_summary",
+            SOURCE,
+            flags=re.DOTALL,
+        )
+        self.assertIsNotNone(builder)
+        body = builder.group("body")
+        self.assertIn("if reliable and not resourceClipped", body)
+        self.assertIn("primary.confirmed and primary.kind >= 11 and not primary.invalidationCandidate", body)
+        self.assertIn("candidate.marketTimeframe == primary.marketTimeframe and candidate.layer == primary.layer", body)
+        self.assertIn("candidate.confirmed and candidate.direction == -primary.direction", body)
+        self.assertIn("math.abs(primary.confirmationPrice - primary.invalidationPrice)", body)
+        self.assertNotIn("f_build_points(", body)
+        self.assertNotIn("f_build_divergences(", body)
+
+    def test_trading_dashboard_discloses_execution_state_and_risk_boundary(self) -> None:
+        self.assertIn("ExecutionState executionState = f_build_execution_state(activeEvidence, executionReliable, resourceClipped)", SOURCE)
+        self.assertIn('"结构状态"', SOURCE)
+        self.assertIn('"主要证据"', SOURCE)
+        self.assertIn('"同 TF 同 Tn 冲突"', SOURCE)
+        self.assertIn('"失效 / 风险距离"', SOURCE)
+        self.assertIn("风险距离仅为确认价与结构失效边界的价格距离；不表示仓位或收益。", SOURCE)
+
+    def test_trading_dashboard_discloses_confirmed_cross_timeframe_opposition(self) -> None:
+        self.assertIn("bool crossTimeframeOpposition = false", SOURCE)
+        self.assertIn("resonance.scope == 2 and resonance.confirmed and resonance.direction == -executionState.direction", SOURCE)
+        self.assertIn('" · 跨周期反向确认"', SOURCE)
+        self.assertIn("它不改写当前结构身份", SOURCE)
+
+    def test_trading_panel_is_movable_and_uses_readable_text(self) -> None:
+        self.assertIn('string tradingPanelPosition = input.string("左中", "交易面板位置"', SOURCE)
+        self.assertIn('"左上", "左中", "左下", "右上", "右中", "右下"', SOURCE)
+        self.assertIn("table.set_position(statusPanel, panelPosition)", SOURCE)
+        self.assertIn("table.cell_set_text_size(statusPanel, 0, panelRow, size.small)", SOURCE)
+        self.assertIn("table.cell_set_text_size(statusPanel, 1, panelRow, size.small)", SOURCE)
+
+    def test_structural_explanations_preserve_theory_and_expose_point_causes(self) -> None:
+        self.assertNotIn("float departureExtreme", SOURCE)
+        self.assertIn('state.kind == 2 ? "趋势资格" : "盘整资格"', SOURCE)
+        self.assertIn('state.status == MOVEMENT_QUALIFIED ? "未完成"', SOURCE)
+        self.assertIn('"趋背#" + str.tostring(current.sourceDivergence)', SOURCE)
+        self.assertIn('"1点#" + str.tostring(current.linkedFirstPoint)', SOURCE)
+        self.assertIn('"·首回试"', SOURCE)
+        self.assertIn('"\\n因果: " + causeText', SOURCE)
+
+    def test_divergence_tooltip_distinguishes_trend_completion_from_consolidation_weakness(self) -> None:
+        self.assertIn('current.kind == 2 ? "趋势完成候选，等待反向确认" : "单中枢减弱，不直接确认一类点"', SOURCE)
+        self.assertIn('"\\n解释: " + usageText', SOURCE)
+        self.assertIn("string divergenceStyle = current.direction == 1 ? label.style_label_down : label.style_label_up", SOURCE)
+
+    def test_center_tooltip_exposes_departure_and_retest_context(self) -> None:
+        self.assertIn('current.leaveState == 2 ? "\\n离开确认: "', SOURCE)
+        self.assertIn('"·回试#" + str.tostring(current.retestChild)', SOURCE)
+        self.assertIn('"\\n离开候选: "', SOURCE)
+        self.assertIn('"\\n离开失败: "', SOURCE)
+        self.assertIn("+ departureText + promotionText", SOURCE)
+
+
 
 if __name__ == "__main__":
     unittest.main()
