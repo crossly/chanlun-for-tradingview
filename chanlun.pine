@@ -327,7 +327,8 @@ type ReferenceEngine
     array<float> pendingLows
     array<int> pendingIndices
     array<int> pendingTimes
-    array<float> histValues
+    array<float> posAreaCums
+    array<float> negAreaCums
     array<float> difValues
     array<Center> centersT0
     array<Center> centersT1
@@ -350,6 +351,22 @@ f_copy_fractal(Fractal source) =>
 
 f_copy_unit(Unit source) =>
     Unit.new(source.layer, source.direction, source.startIndex, source.endIndex, source.startTime, source.endTime, source.confirmationTime, source.startPrice, source.endPrice, source.confirmed, source.firstChild, source.lastChild, source.macdArea, source.difExtreme, source.rangeHigh, source.rangeLow)
+
+// 预览路径只会追加元素或修改各数组的最后一个对象，因此浅拷贝共享已确认
+// 对象，仅深拷贝可变尾部；这是隔离候选副本所需的最小拷贝量。
+f_tail_isolated_kbars(array<KBar> source) =>
+    array<KBar> result = array.copy(source)
+    int count = array.size(result)
+    if count > 0
+        array.set(result, count - 1, f_copy_kbar(array.get(result, count - 1)))
+    result
+
+f_tail_isolated_units(array<Unit> source) =>
+    array<Unit> result = array.copy(source)
+    int count = array.size(result)
+    if count > 0
+        array.set(result, count - 1, f_copy_unit(array.get(result, count - 1)))
+    result
 
 f_copy_kbars(array<KBar> source) =>
     array<KBar> result = array.new<KBar>()
@@ -376,7 +393,7 @@ f_copy_units(array<Unit> source) =>
     result
 
 f_new_reference_engine() =>
-    ReferenceEngine.new(ReferenceState.new(false, 0, na, 0, na, false), array.new<KBar>(), array.new<Fractal>(), array.new<Unit>(), array.new<Unit>(), array.new<Unit>(), array.new<Unit>(), array.new<Unit>(), array.new<float>(), array.new<float>(), array.new<int>(), array.new<int>(), array.new<float>(), array.new<float>(), array.new<Center>(), array.new<Center>(), array.new<Center>(), array.new<Divergence>(), array.new<Divergence>(), array.new<Divergence>(), array.new<BuySellPoint>(), array.new<BuySellPoint>(), array.new<BuySellPoint>(), na, na, na)
+    ReferenceEngine.new(ReferenceState.new(false, 0, na, 0, na, false), array.new<KBar>(), array.new<Fractal>(), array.new<Unit>(), array.new<Unit>(), array.new<Unit>(), array.new<Unit>(), array.new<Unit>(), array.new<float>(), array.new<float>(), array.new<int>(), array.new<int>(), array.new<float>(), array.new<float>(), array.new<float>(), array.new<Center>(), array.new<Center>(), array.new<Center>(), array.new<Divergence>(), array.new<Divergence>(), array.new<Divergence>(), array.new<BuySellPoint>(), array.new<BuySellPoint>(), array.new<BuySellPoint>(), na, na, na)
 
 f_next_reference_seconds(int seconds) =>
     seconds < 60 ? 60 : seconds < 300 ? 300 : seconds < 900 ? 900 : seconds < 3600 ? 3600 : seconds < 14400 ? 14400 : seconds < 86400 ? 86400 : seconds < 604800 ? 604800 : seconds < 2592000 ? 2592000 : seconds < 7776000 ? 7776000 : seconds < 31536000 ? 31536000 : 0
@@ -479,17 +496,22 @@ f_detect_confirmed_fractal(array<KBar> bars, int confirmationTime) =>
             result := Fractal.new(-1, middlePosition, middleBar.lowIndex, middleBar.lowTime, confirmationTime, middleBar.low)
     result
 
-f_unit_macd_area(array<float> histValues, int startIndex, int endIndex, int direction) =>
-    float area = 0.0
+// MACD 同向柱体面积使用前缀和：摄入时累积正/负柱体绝对值，
+// 任意区间面积由两次查表相减得到，避免每次结构重建按区间循环。
+f_push_macd_cums(array<float> posAreaCums, array<float> negAreaCums, float histValue) =>
+    int count = array.size(posAreaCums)
+    float previousPos = count > 0 ? array.get(posAreaCums, count - 1) : 0.0
+    float previousNeg = count > 0 ? array.get(negAreaCums, count - 1) : 0.0
+    float positivePart = na(histValue) or histValue <= 0 ? 0.0 : histValue
+    float negativePart = na(histValue) or histValue >= 0 ? 0.0 : -histValue
+    array.push(posAreaCums, previousPos + positivePart)
+    array.push(negAreaCums, previousNeg + negativePart)
+
+f_unit_macd_area(array<float> posAreaCums, array<float> negAreaCums, int startIndex, int endIndex, int direction) =>
+    array<float> cums = direction == 1 ? posAreaCums : negAreaCums
     int firstIndex = math.max(0, math.min(startIndex, endIndex))
-    int lastIndex = math.min(array.size(histValues) - 1, math.max(startIndex, endIndex))
-    if lastIndex >= firstIndex
-        for i = firstIndex to lastIndex
-            float value = array.get(histValues, i)
-            bool sameDirection = direction == 1 ? value > 0 : value < 0
-            if not na(value) and sameDirection
-                area += math.abs(value)
-    area
+    int lastIndex = math.min(array.size(cums) - 1, math.max(startIndex, endIndex))
+    lastIndex >= firstIndex ? array.get(cums, lastIndex) - (firstIndex > 0 ? array.get(cums, firstIndex - 1) : 0.0) : 0.0
 
 f_unit_dif_extreme(array<float> difValues, int startIndex, int endIndex, int direction) =>
     float extreme = na
@@ -502,12 +524,12 @@ f_unit_dif_extreme(array<float> difValues, int startIndex, int endIndex, int dir
                 extreme := na(extreme) ? value : direction == 1 ? math.max(extreme, value) : math.min(extreme, value)
     extreme
 
-f_apply_unit_strength(Unit unit, array<float> histValues, array<float> difValues) =>
-    unit.macdArea := f_unit_macd_area(histValues, unit.startIndex, unit.endIndex, unit.direction)
+f_apply_unit_strength(Unit unit, array<float> posAreaCums, array<float> negAreaCums, array<float> difValues) =>
+    unit.macdArea := f_unit_macd_area(posAreaCums, negAreaCums, unit.startIndex, unit.endIndex, unit.direction)
     unit.difExtreme := f_unit_dif_extreme(difValues, unit.startIndex, unit.endIndex, unit.direction)
     unit
 
-f_update_strokes(array<Fractal> endpoints, array<Unit> strokes, Fractal newFractal, array<float> histValues, array<float> difValues, bool allowConfirmation) =>
+f_update_strokes(array<Fractal> endpoints, array<Unit> strokes, Fractal newFractal, array<float> posAreaCums, array<float> negAreaCums, array<float> difValues, bool allowConfirmation) =>
     bool changed = false
     int endpointCount = array.size(endpoints)
     if endpointCount == 0
@@ -530,7 +552,7 @@ f_update_strokes(array<Fractal> endpoints, array<Unit> strokes, Fractal newFract
                         lastStroke.endPrice := newFractal.price
                         lastStroke.rangeHigh := math.max(lastStroke.startPrice, lastStroke.endPrice)
                         lastStroke.rangeLow := math.min(lastStroke.startPrice, lastStroke.endPrice)
-                        lastStroke := f_apply_unit_strength(lastStroke, histValues, difValues)
+                        lastStroke := f_apply_unit_strength(lastStroke, posAreaCums, negAreaCums, difValues)
                         array.set(strokes, strokeCount - 1, lastStroke)
         else
             bool enoughSyntheticBars = math.abs(newFractal.kPosition - lastEndpoint.kPosition) >= 3
@@ -544,13 +566,13 @@ f_update_strokes(array<Fractal> endpoints, array<Unit> strokes, Fractal newFract
                     array.set(strokes, strokeCount - 1, previousStroke)
                 int direction = lastEndpoint.kind == -1 ? 1 : -1
                 Unit nextStroke = Unit.new(0, direction, lastEndpoint.structureIndex, newFractal.structureIndex, lastEndpoint.structureTime, newFractal.structureTime, na, lastEndpoint.price, newFractal.price, false, lastEndpoint.kPosition, newFractal.kPosition, na, na, math.max(lastEndpoint.price, newFractal.price), math.min(lastEndpoint.price, newFractal.price))
-                nextStroke := f_apply_unit_strength(nextStroke, histValues, difValues)
+                nextStroke := f_apply_unit_strength(nextStroke, posAreaCums, negAreaCums, difValues)
                 array.push(strokes, nextStroke)
                 array.push(endpoints, newFractal)
                 changed := true
     changed
 
-f_extend_terminal_candidate(array<Unit> strokes, int sourceIndex, int sourceTime, float sourceHigh, float sourceLow, array<float> histValues, array<float> difValues) =>
+f_extend_terminal_candidate(array<Unit> strokes, int sourceIndex, int sourceTime, float sourceHigh, float sourceLow, array<float> posAreaCums, array<float> negAreaCums, array<float> difValues) =>
     int strokeCount = array.size(strokes)
     if strokeCount > 0
         Unit terminal = array.get(strokes, strokeCount - 1)
@@ -562,7 +584,7 @@ f_extend_terminal_candidate(array<Unit> strokes, int sourceIndex, int sourceTime
                 terminal.endPrice := terminal.direction == 1 ? sourceHigh : sourceLow
                 terminal.rangeHigh := math.max(terminal.startPrice, terminal.endPrice)
                 terminal.rangeLow := math.min(terminal.startPrice, terminal.endPrice)
-                terminal := f_apply_unit_strength(terminal, histValues, difValues)
+                terminal := f_apply_unit_strength(terminal, posAreaCums, negAreaCums, difValues)
                 array.set(strokes, strokeCount - 1, terminal)
 
 f_unit_high(Unit unit) =>
@@ -663,7 +685,7 @@ f_reverse_feature_confirmed(array<Unit> lowerUnits, int startChild, int reverseD
                         break
     confirmed
 
-f_build_recursive_layer(array<Unit> lowerUnits, array<Unit> outputUnits, int layer, array<float> histValues, array<float> difValues) =>
+f_build_recursive_layer(array<Unit> lowerUnits, array<Unit> outputUnits, int layer, array<float> posAreaCums, array<float> negAreaCums, array<float> difValues) =>
     array.clear(outputUnits)
     int lowerCount = array.size(lowerUnits)
     int startChild = 0
@@ -704,7 +726,7 @@ f_build_recursive_layer(array<Unit> lowerUnits, array<Unit> outputUnits, int lay
             float segmentHigh = f_children_range_high(lowerUnits, startChild, endpointChild - 1)
             float segmentLow = f_children_range_low(lowerUnits, startChild, endpointChild - 1)
             Unit confirmedUnit = Unit.new(layer, segmentDirection, startUnit.startIndex, boundary.startIndex, startUnit.startTime, boundary.startTime, confirmationTime, startUnit.startPrice, boundary.startPrice, true, startChild, endpointChild - 1, na, na, segmentHigh, segmentLow)
-            confirmedUnit := f_apply_unit_strength(confirmedUnit, histValues, difValues)
+            confirmedUnit := f_apply_unit_strength(confirmedUnit, posAreaCums, negAreaCums, difValues)
             array.push(outputUnits, confirmedUnit)
             startChild := endpointChild
         else
@@ -734,14 +756,21 @@ f_build_recursive_layer(array<Unit> lowerUnits, array<Unit> outputUnits, int lay
         float candidateHigh = f_children_range_high(lowerUnits, startChild, lowerCount - 1)
         float candidateLow = f_children_range_low(lowerUnits, startChild, lowerCount - 1)
         Unit candidateUnit = Unit.new(layer, candidateDirection, candidateStart.startIndex, extremeIndex, candidateStart.startTime, extremeTime, na, candidateStart.startPrice, extremePrice, false, startChild, lowerCount - 1, na, na, candidateHigh, candidateLow)
-        candidateUnit := f_apply_unit_strength(candidateUnit, histValues, difValues)
+        candidateUnit := f_apply_unit_strength(candidateUnit, posAreaCums, negAreaCums, difValues)
         array.push(outputUnits, candidateUnit)
 
 f_unit_overlaps_center(Unit unit, float zd, float zg) =>
     math.max(f_unit_low(unit), zd) < math.min(f_unit_high(unit), zg)
 
-f_unit_center_side(Unit unit, float zd, float zg) =>
-    f_unit_low(unit) >= zg ? 1 : f_unit_high(unit) <= zd ? -1 : 0
+// 离开判定是方向相关的：真实离开段起点在核心内部，整段区间必然与核心
+// 保持重叠，因此不能用“整段脱离核心”判据——那会把随后的反向回试误认成
+// 离开段。改用方向端点越过对应核心边界。
+f_unit_cross_side(Unit unit, float zd, float zg) =>
+    unit.direction == 1 and f_unit_high(unit) > zg ? 1 : unit.direction == -1 and f_unit_low(unit) < zd ? -1 : 0
+
+// 回试端点保持在核心外侧（向上离开时不低于 ZG，向下离开时不高于 ZD）。
+f_retest_holds_outside(Unit retest, int leaveDirection, float zd, float zg) =>
+    leaveDirection == 1 ? f_unit_low(retest) >= zg : f_unit_high(retest) <= zd
 
 f_has_reliable_confirmed_center(array<Unit> units, int warmupBars) =>
     bool found = false
@@ -781,34 +810,13 @@ f_create_center(array<Unit> units, int layer, int startChild) =>
             int coreConfirmationTime = coreConfirmed ? (na(third.confirmationTime) ? third.endTime : third.confirmationTime) : na
             Center newCenter = Center.new(layer, startChild, startChild + 2, startChild + 2, first.startIndex, third.endIndex, first.startTime, third.endTime, coreConfirmationTime, na, zd, zg, dd, gg, coreConfirmed, coreConfirmed, 0, 0, na, na, false, 0, na, na, false, false, na, na, na, na, na, na, na)
             if startChild + 3 < unitCount
+                // 方向感知口径：方向端点越过对应核心边界的同向单元是离开候选，
+                // 单元交替保证紧随其后的反向单元就是回试段。
                 for i = startChild + 3 to unitCount - 1
                     Unit current = array.get(units, i)
-                    bool overlaps = f_unit_overlaps_center(current, newCenter.zd, newCenter.zg)
-                    if overlaps
-                        if newCenter.leaveState == 1 and not na(newCenter.leaveChild)
-                            Unit failedLeave = array.get(units, newCenter.leaveChild)
-                            newCenter.dd := math.min(newCenter.dd, f_unit_low(failedLeave))
-                            newCenter.gg := math.max(newCenter.gg, f_unit_high(failedLeave))
-                            newCenter.failedDeparture := true
-                            newCenter.failedLeaveDirection := newCenter.leaveDirection
-                            newCenter.failedLeaveChild := newCenter.leaveChild
-                            newCenter.failedRetestChild := i
-                            newCenter.stateConfirmed := newCenter.confirmed and failedLeave.confirmed and current.confirmed
-                        else
-                            newCenter.stateConfirmed := newCenter.stateConfirmed and current.confirmed
-                        newCenter.dd := math.min(newCenter.dd, f_unit_low(current))
-                        newCenter.gg := math.max(newCenter.gg, f_unit_high(current))
-                        newCenter.lastOverlapChild := i
-                        newCenter.endChild := i
-                        newCenter.endIndex := current.endIndex
-                        newCenter.endTime := current.endTime
-                        newCenter.leaveState := 0
-                        newCenter.leaveDirection := 0
-                        newCenter.leaveChild := na
-                        newCenter.retestChild := na
-                    else
-                        int side = f_unit_center_side(current, newCenter.zd, newCenter.zg)
-                        if newCenter.leaveState == 0
+                    if newCenter.leaveState == 0
+                        int side = f_unit_cross_side(current, newCenter.zd, newCenter.zg)
+                        if side != 0
                             newCenter.leaveState := 1
                             newCenter.leaveDirection := side
                             newCenter.leaveChild := i
@@ -816,8 +824,19 @@ f_create_center(array<Unit> units, int layer, int startChild) =>
                             newCenter.endIndex := current.endIndex
                             newCenter.endTime := current.endTime
                             newCenter.stateConfirmed := false
-                        else if side == newCenter.leaveDirection and side != 0 and current.direction == -newCenter.leaveDirection
-                            Unit leaving = array.get(units, newCenter.leaveChild)
+                        else
+                            newCenter.stateConfirmed := newCenter.stateConfirmed and current.confirmed
+                            if f_unit_overlaps_center(current, newCenter.zd, newCenter.zg)
+                                newCenter.dd := math.min(newCenter.dd, f_unit_low(current))
+                                newCenter.gg := math.max(newCenter.gg, f_unit_high(current))
+                                newCenter.lastOverlapChild := i
+                            newCenter.endChild := i
+                            newCenter.endIndex := current.endIndex
+                            newCenter.endTime := current.endTime
+                    else
+                        Unit leaving = array.get(units, newCenter.leaveChild)
+                        bool holdsOutside = f_retest_holds_outside(current, newCenter.leaveDirection, newCenter.zd, newCenter.zg)
+                        if holdsOutside
                             newCenter.retestChild := i
                             newCenter.endChild := i
                             newCenter.endIndex := current.endIndex
@@ -830,14 +849,15 @@ f_create_center(array<Unit> units, int layer, int startChild) =>
                                 newCenter.stateConfirmed := false
                             break
                         else
-                            Unit failedLeave = array.get(units, newCenter.leaveChild)
-                            newCenter.dd := math.min(newCenter.dd, math.min(f_unit_low(failedLeave), f_unit_low(current)))
-                            newCenter.gg := math.max(newCenter.gg, math.max(f_unit_high(failedLeave), f_unit_high(current)))
+                            // 回试重返核心：离开失败，两段并入波动区间后继续延伸。
+                            newCenter.dd := math.min(newCenter.dd, math.min(f_unit_low(leaving), f_unit_low(current)))
+                            newCenter.gg := math.max(newCenter.gg, math.max(f_unit_high(leaving), f_unit_high(current)))
                             newCenter.failedDeparture := true
                             newCenter.failedLeaveDirection := newCenter.leaveDirection
                             newCenter.failedLeaveChild := newCenter.leaveChild
                             newCenter.failedRetestChild := i
-                            newCenter.stateConfirmed := newCenter.confirmed and failedLeave.confirmed and current.confirmed
+                            newCenter.stateConfirmed := newCenter.confirmed and leaving.confirmed and current.confirmed
+                            newCenter.lastOverlapChild := i
                             newCenter.endChild := i
                             newCenter.endIndex := current.endIndex
                             newCenter.endTime := current.endTime
@@ -845,6 +865,12 @@ f_create_center(array<Unit> units, int layer, int startChild) =>
                             newCenter.leaveDirection := 0
                             newCenter.leaveChild := na
                             newCenter.retestChild := na
+                            int reverseSide = f_unit_cross_side(current, newCenter.zd, newCenter.zg)
+                            if reverseSide != 0
+                                newCenter.leaveState := 1
+                                newCenter.leaveDirection := reverseSide
+                                newCenter.leaveChild := i
+                                newCenter.stateConfirmed := false
             result := newCenter
     result
 
@@ -1049,7 +1075,7 @@ f_build_divergences(array<Unit> units, array<Center> centers, array<Divergence> 
                                 current.invalidationCandidate := true
                 array.set(divergences, divergenceIndex, current)
 
-f_build_completed_movements(array<Unit> components, array<Center> centers, array<Divergence> divergences, array<Unit> movements, int trendLevel, array<float> histValues, array<float> difValues) =>
+f_build_completed_movements(array<Unit> components, array<Center> centers, array<Divergence> divergences, array<Unit> movements, int trendLevel, array<float> posAreaCums, array<float> negAreaCums, array<float> difValues) =>
     array.clear(movements)
     int nextFirstComponent = 0
     int previousDirection = 0
@@ -1081,7 +1107,7 @@ f_build_completed_movements(array<Unit> components, array<Center> centers, array
                     float movementLow = f_children_range_low(components, firstComponent, lastComponent)
                     int completionTime = na(proof.confirmationTime) ? proof.endTime : proof.confirmationTime
                     Unit movement = Unit.new(trendLevel, divergence.direction, first.startIndex, last.endIndex, first.startTime, last.endTime, completionTime, first.startPrice, last.endPrice, true, firstComponent, lastComponent, na, na, movementHigh, movementLow)
-                    movement := f_apply_unit_strength(movement, histValues, difValues)
+                    movement := f_apply_unit_strength(movement, posAreaCums, negAreaCums, difValues)
                     array.push(movements, movement)
                     nextFirstComponent := proofComponent
                     previousDirection := divergence.direction
@@ -1581,12 +1607,15 @@ f_reconcile_lifecycle(array<StructureSnapshot> previous, array<StructureSnapshot
     events
 
 f_upsert_evidence(array<Evidence> ledger, Evidence incoming) =>
+    // 证据身份必须包含结构时间：同层同方向可以同时存在多条来自不同
+    // 结构事件的有效证据，缺少结构时间会让较早证据被较新证据顶替，
+    // 永远进不了共振统计与提醒（事件 ID 本身就含结构时间，与其对齐）。
     int replaceIndex = na
     int evidenceCount = array.size(ledger)
     if evidenceCount > 0
         for evidenceIndex = 0 to evidenceCount - 1
             Evidence current = array.get(ledger, evidenceIndex)
-            bool sameIdentity = current.market == incoming.market and current.layer == incoming.layer and current.kind == incoming.kind and current.direction == incoming.direction and current.confirmed == incoming.confirmed
+            bool sameIdentity = current.market == incoming.market and current.layer == incoming.layer and current.kind == incoming.kind and current.direction == incoming.direction and current.confirmed == incoming.confirmed and current.structureTime == incoming.structureTime
             if sameIdentity
                 replaceIndex := evidenceIndex
                 break
@@ -1913,14 +1942,14 @@ f_evidence_payload(Evidence evidence) =>
     string messageZh = f_evidence_short(evidence) + (evidence.confirmed ? " 已确认" : " 候选") + (evidence.invalidationCandidate ? "，当前价格越界但等待结构确认失效" : "")
     f_json_payload(evidence.eventId, evidence.marketTimeframe, evidence.layer, evidence.movementContext, evidence.direction, eventType, status, evidence.structureTime, evidence.structurePrice, evidence.confirmationTime, evidence.confirmationPrice, evidence.sourceIndex, evidenceSummary, messageZh)
 
-f_process_reference_bar(bool enabled, int sourceTime, float sourceHigh, float sourceLow, float sourceDif, float sourceHist, int knownTime, ReferenceState state, array<KBar> bars, array<Fractal> endpoints, array<Unit> strokes, array<float> pendingHighs, array<float> pendingLows, array<int> pendingIndices, array<int> pendingTimes, array<float> histValues, array<float> difValues, bool allowConfirmation) =>
+f_process_reference_bar(bool enabled, int sourceTime, float sourceHigh, float sourceLow, float sourceDif, float sourceHist, int knownTime, ReferenceState state, array<KBar> bars, array<Fractal> endpoints, array<Unit> strokes, array<float> pendingHighs, array<float> pendingLows, array<int> pendingIndices, array<int> pendingTimes, array<float> posAreaCums, array<float> negAreaCums, array<float> difValues, bool allowConfirmation) =>
     bool newConfirmedBar = enabled and not na(sourceTime) and (na(state.lastSourceTime) or sourceTime != state.lastSourceTime)
     if newConfirmedBar
         int sourceIndex = state.nextIndex
         state.lastSourceTime := sourceTime
         state.nextIndex += 1
         state.lastKnownTime := knownTime
-        array.push(histValues, sourceHist)
+        f_push_macd_cums(posAreaCums, negAreaCums, sourceHist)
         array.push(difValues, sourceDif)
         bool appendedSynthetic = false
         if not state.seedReady
@@ -1945,30 +1974,30 @@ f_process_reference_bar(bool enabled, int sourceTime, float sourceHigh, float so
         if appendedSynthetic
             Fractal confirmedFractal = f_detect_confirmed_fractal(bars, knownTime)
             if not na(confirmedFractal)
-                bool structuresChanged = f_update_strokes(endpoints, strokes, confirmedFractal, histValues, difValues, allowConfirmation)
+                bool structuresChanged = f_update_strokes(endpoints, strokes, confirmedFractal, posAreaCums, negAreaCums, difValues, allowConfirmation)
                 state.structuresDirty := state.structuresDirty or structuresChanged
         if not allowConfirmation
-            f_extend_terminal_candidate(strokes, sourceIndex, sourceTime, sourceHigh, sourceLow, histValues, difValues)
+            f_extend_terminal_candidate(strokes, sourceIndex, sourceTime, sourceHigh, sourceLow, posAreaCums, negAreaCums, difValues)
     state
 
 f_ingest_reference(bool enabled, int sourceTime, float sourceHigh, float sourceLow, float sourceDif, float sourceHist, int knownTime, ReferenceEngine engine, bool allowConfirmation) =>
-    engine.state := f_process_reference_bar(enabled, sourceTime, sourceHigh, sourceLow, sourceDif, sourceHist, knownTime, engine.state, engine.bars, engine.endpoints, engine.strokes, engine.pendingHighs, engine.pendingLows, engine.pendingIndices, engine.pendingTimes, engine.histValues, engine.difValues, allowConfirmation)
+    engine.state := f_process_reference_bar(enabled, sourceTime, sourceHigh, sourceLow, sourceDif, sourceHist, knownTime, engine.state, engine.bars, engine.endpoints, engine.strokes, engine.pendingHighs, engine.pendingLows, engine.pendingIndices, engine.pendingTimes, engine.posAreaCums, engine.negAreaCums, engine.difValues, allowConfirmation)
     engine
 
 f_build_reference_engine(ReferenceEngine engine) =>
     array<BuySellPoint> noLowerPoints = array.new<BuySellPoint>()
-    f_build_recursive_layer(engine.strokes, engine.segmentsS, -1, engine.histValues, engine.difValues)
+    f_build_recursive_layer(engine.strokes, engine.segmentsS, -1, engine.posAreaCums, engine.negAreaCums, engine.difValues)
     f_build_centers(engine.segmentsS, engine.centersT0, 0)
     f_build_divergences(engine.segmentsS, engine.centersT0, engine.divergencesT0, 0, MACD_WARMUP_BARS)
-    f_build_completed_movements(engine.segmentsS, engine.centersT0, engine.divergencesT0, engine.movementsT0, 0, engine.histValues, engine.difValues)
+    f_build_completed_movements(engine.segmentsS, engine.centersT0, engine.divergencesT0, engine.movementsT0, 0, engine.posAreaCums, engine.negAreaCums, engine.difValues)
 
     f_build_centers(engine.movementsT0, engine.centersT1, 1)
     f_build_divergences(engine.movementsT0, engine.centersT1, engine.divergencesT1, 1, MACD_WARMUP_BARS)
-    f_build_completed_movements(engine.movementsT0, engine.centersT1, engine.divergencesT1, engine.movementsT1, 1, engine.histValues, engine.difValues)
+    f_build_completed_movements(engine.movementsT0, engine.centersT1, engine.divergencesT1, engine.movementsT1, 1, engine.posAreaCums, engine.negAreaCums, engine.difValues)
 
     f_build_centers(engine.movementsT1, engine.centersT2, 2)
     f_build_divergences(engine.movementsT1, engine.centersT2, engine.divergencesT2, 2, MACD_WARMUP_BARS)
-    f_build_completed_movements(engine.movementsT1, engine.centersT2, engine.divergencesT2, engine.movementsT2, 2, engine.histValues, engine.difValues)
+    f_build_completed_movements(engine.movementsT1, engine.centersT2, engine.divergencesT2, engine.movementsT2, 2, engine.posAreaCums, engine.negAreaCums, engine.difValues)
     f_link_center_promotions(engine.centersT0, engine.centersT1, engine.movementsT0)
     f_link_center_promotions(engine.centersT1, engine.centersT2, engine.movementsT1)
     f_build_points(engine.segmentsS, engine.centersT0, engine.divergencesT0, engine.movementsT0, noLowerPoints, engine.pointsT0, 0)
@@ -1980,24 +2009,24 @@ f_build_reference_engine(ReferenceEngine engine) =>
     engine.state.structuresDirty := false
     engine
 
-f_build_focus_hierarchy(array<Unit> sourceStrokes, array<float> histValues, array<float> difValues, array<Unit> segments, array<Unit> movements0, array<Unit> movements1, array<Unit> movements2, array<Unit> movements3, array<Center> centers0, array<Center> centers1, array<Center> centers2, array<Center> centers3, array<Divergence> divergences0, array<Divergence> divergences1, array<Divergence> divergences2, array<Divergence> divergences3, array<BuySellPoint> points0, array<BuySellPoint> points1, array<BuySellPoint> points2, array<BuySellPoint> points3) =>
+f_build_focus_hierarchy(array<Unit> sourceStrokes, array<float> posAreaCums, array<float> negAreaCums, array<float> difValues, array<Unit> segments, array<Unit> movements0, array<Unit> movements1, array<Unit> movements2, array<Unit> movements3, array<Center> centers0, array<Center> centers1, array<Center> centers2, array<Center> centers3, array<Divergence> divergences0, array<Divergence> divergences1, array<Divergence> divergences2, array<Divergence> divergences3, array<BuySellPoint> points0, array<BuySellPoint> points1, array<BuySellPoint> points2, array<BuySellPoint> points3) =>
     array<BuySellPoint> noLowerPoints = array.new<BuySellPoint>()
-    f_build_recursive_layer(sourceStrokes, segments, -1, histValues, difValues)
+    f_build_recursive_layer(sourceStrokes, segments, -1, posAreaCums, negAreaCums, difValues)
     f_build_centers(segments, centers0, 0)
     f_build_divergences(segments, centers0, divergences0, 0, MACD_WARMUP_BARS)
-    f_build_completed_movements(segments, centers0, divergences0, movements0, 0, histValues, difValues)
+    f_build_completed_movements(segments, centers0, divergences0, movements0, 0, posAreaCums, negAreaCums, difValues)
 
     f_build_centers(movements0, centers1, 1)
     f_build_divergences(movements0, centers1, divergences1, 1, MACD_WARMUP_BARS)
-    f_build_completed_movements(movements0, centers1, divergences1, movements1, 1, histValues, difValues)
+    f_build_completed_movements(movements0, centers1, divergences1, movements1, 1, posAreaCums, negAreaCums, difValues)
 
     f_build_centers(movements1, centers2, 2)
     f_build_divergences(movements1, centers2, divergences2, 2, MACD_WARMUP_BARS)
-    f_build_completed_movements(movements1, centers2, divergences2, movements2, 2, histValues, difValues)
+    f_build_completed_movements(movements1, centers2, divergences2, movements2, 2, posAreaCums, negAreaCums, difValues)
 
     f_build_centers(movements2, centers3, 3)
     f_build_divergences(movements2, centers3, divergences3, 3, MACD_WARMUP_BARS)
-    f_build_completed_movements(movements2, centers3, divergences3, movements3, 3, histValues, difValues)
+    f_build_completed_movements(movements2, centers3, divergences3, movements3, 3, posAreaCums, negAreaCums, difValues)
 
     f_link_center_promotions(centers0, centers1, movements0)
     f_link_center_promotions(centers1, centers2, movements1)
@@ -2122,7 +2151,8 @@ var array<Unit> strokes = array.new<Unit>()
 var array<KBar> viewSyntheticBars = array.new<KBar>()
 var array<Fractal> viewStrokeEndpoints = array.new<Fractal>()
 var array<Unit> viewStrokes = array.new<Unit>()
-var array<float> viewMacdHistValues = array.new<float>()
+var array<float> viewPosAreaCums = array.new<float>()
+var array<float> viewNegAreaCums = array.new<float>()
 var array<float> viewDifValues = array.new<float>()
 var array<Unit> segmentsS = array.new<Unit>()
 var array<Unit> movementsT0 = array.new<Unit>()
@@ -2164,7 +2194,8 @@ var array<float> pendingHighs = array.new<float>()
 var array<float> pendingLows = array.new<float>()
 var array<int> pendingIndices = array.new<int>()
 var array<int> pendingTimes = array.new<int>()
-var array<float> macdHistValues = array.new<float>()
+var array<float> posAreaCums = array.new<float>()
+var array<float> negAreaCums = array.new<float>()
 var array<float> difValues = array.new<float>()
 var bool seedReady = false
 var int seedDirection = 0
@@ -2184,7 +2215,7 @@ if barstate.isfirst
 if confirmedRawBar and (na(lastProcessedRawIndex) or bar_index != lastProcessedRawIndex)
     lastProcessedRawIndex := bar_index
     array.push(difValues, difValue)
-    array.push(macdHistValues, macdHistValue)
+    f_push_macd_cums(posAreaCums, negAreaCums, macdHistValue)
     bool appendedSynthetic = false
     if not seedReady
         array.push(pendingHighs, normalizedHigh)
@@ -2209,12 +2240,12 @@ if confirmedRawBar and (na(lastProcessedRawIndex) or bar_index != lastProcessedR
         Fractal confirmedFractal = f_detect_confirmed_fractal(syntheticBars, time)
         if not na(confirmedFractal)
             array.push(baseFractals, confirmedFractal)
-            bool structuresChanged = f_update_strokes(strokeEndpoints, strokes, confirmedFractal, macdHistValues, difValues, true)
+            bool structuresChanged = f_update_strokes(strokeEndpoints, strokes, confirmedFractal, posAreaCums, negAreaCums, difValues, true)
             focusStructuresDirty := focusStructuresDirty or structuresChanged
 
 bool focusReplayDirty = confirmedRawBar and focusStructuresDirty
 if focusReplayDirty
-    [historyTrendT0, historyTrendT1, historyTrendT2, historyTrendT3] = f_build_focus_hierarchy(strokes, macdHistValues, difValues, segmentsS, movementsT0, movementsT1, movementsT2, movementsT3, centersT0, centersT1, centersT2, centersT3, divergencesT0, divergencesT1, divergencesT2, divergencesT3, pointsT0, pointsT1, pointsT2, pointsT3)
+    [historyTrendT0, historyTrendT1, historyTrendT2, historyTrendT3] = f_build_focus_hierarchy(strokes, posAreaCums, negAreaCums, difValues, segmentsS, movementsT0, movementsT1, movementsT2, movementsT3, centersT0, centersT1, centersT2, centersT3, divergencesT0, divergencesT1, divergencesT2, divergencesT3, pointsT0, pointsT1, pointsT2, pointsT3)
     trendT0 := historyTrendT0
     trendT1 := historyTrendT1
     trendT2 := historyTrendT2
@@ -2243,14 +2274,15 @@ if referenceStructuresDirty4
     lifecycleEvents := f_reconcile_lifecycle(previousReferenceStructureSnapshots4, currentStructureSnapshots, lifecycleEvents)
 
 if barstate.islast
-    viewSyntheticBars := f_copy_kbars(syntheticBars)
-    viewStrokeEndpoints := f_copy_fractals(strokeEndpoints)
-    viewStrokes := f_copy_units(strokes)
-    viewMacdHistValues := array.copy(macdHistValues)
+    viewSyntheticBars := f_tail_isolated_kbars(syntheticBars)
+    viewStrokeEndpoints := array.copy(strokeEndpoints)
+    viewStrokes := f_tail_isolated_units(strokes)
+    viewPosAreaCums := array.copy(posAreaCums)
+    viewNegAreaCums := array.copy(negAreaCums)
     viewDifValues := array.copy(difValues)
     if standardChart and not barstate.isconfirmed
         array.push(viewDifValues, difValue)
-        array.push(viewMacdHistValues, macdHistValue)
+        f_push_macd_cums(viewPosAreaCums, viewNegAreaCums, macdHistValue)
         bool previewAppendedSynthetic = false
         if seedReady
             previewAppendedSynthetic := f_ingest_kbar(viewSyntheticBars, normalizedHigh, normalizedLow, bar_index, time, seedDirection)
@@ -2272,10 +2304,10 @@ if barstate.islast
         if previewAppendedSynthetic
             Fractal previewFractal = f_detect_confirmed_fractal(viewSyntheticBars, na)
             if not na(previewFractal)
-                f_update_strokes(viewStrokeEndpoints, viewStrokes, previewFractal, viewMacdHistValues, viewDifValues, false)
-        f_extend_terminal_candidate(viewStrokes, bar_index, time, normalizedHigh, normalizedLow, viewMacdHistValues, viewDifValues)
+                f_update_strokes(viewStrokeEndpoints, viewStrokes, previewFractal, viewPosAreaCums, viewNegAreaCums, viewDifValues, false)
+        f_extend_terminal_candidate(viewStrokes, bar_index, time, normalizedHigh, normalizedLow, viewPosAreaCums, viewNegAreaCums, viewDifValues)
 
-    [currentTrendT0, currentTrendT1, currentTrendT2, currentTrendT3] = f_build_focus_hierarchy(viewStrokes, viewMacdHistValues, viewDifValues, segmentsS, movementsT0, movementsT1, movementsT2, movementsT3, centersT0, centersT1, centersT2, centersT3, divergencesT0, divergencesT1, divergencesT2, divergencesT3, pointsT0, pointsT1, pointsT2, pointsT3)
+    [currentTrendT0, currentTrendT1, currentTrendT2, currentTrendT3] = f_build_focus_hierarchy(viewStrokes, viewPosAreaCums, viewNegAreaCums, viewDifValues, segmentsS, movementsT0, movementsT1, movementsT2, movementsT3, centersT0, centersT1, centersT2, centersT3, divergencesT0, divergencesT1, divergencesT2, divergencesT3, pointsT0, pointsT1, pointsT2, pointsT3)
     trendT0 := currentTrendT0
     trendT1 := currentTrendT1
     trendT2 := currentTrendT2

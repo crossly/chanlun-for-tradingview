@@ -264,6 +264,32 @@ class CourseV2ContractTest(unittest.TestCase):
             SOURCE,
         )
 
+    def test_departure_detection_is_direction_aware(self) -> None:
+        # ADR 0046: leaving units start inside the core, so whole-unit
+        # separation misidentifies the reverse retest as the departure.
+        self.assertIn("f_unit_cross_side", SOURCE)
+        self.assertIn("f_retest_holds_outside", SOURCE)
+        self.assertNotIn("f_unit_center_side", SOURCE)
+        self.assertIn(
+            "unit.direction == 1 and f_unit_high(unit) > zg ? 1 : unit.direction == -1 and f_unit_low(unit) < zd ? -1 : 0",
+            SOURCE,
+        )
+        # a failed retest that crosses the opposite boundary immediately
+        # becomes the new departure candidate
+        self.assertIn("int reverseSide = f_unit_cross_side(current, newCenter.zd, newCenter.zg)", SOURCE)
+
+    def test_macd_area_uses_prefix_sums(self) -> None:
+        self.assertIn("f_push_macd_cums", SOURCE)
+        self.assertIn("posAreaCums", SOURCE)
+        self.assertIn("negAreaCums", SOURCE)
+        self.assertNotIn("array<float> histValues", SOURCE)
+
+    def test_evidence_identity_includes_structure_time(self) -> None:
+        self.assertIn(
+            "current.confirmed == incoming.confirmed and current.structureTime == incoming.structureTime",
+            SOURCE,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

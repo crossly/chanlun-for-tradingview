@@ -8,11 +8,12 @@
 
 | 日期 | 品种 | 周期 | 配置 | 官方编译 | 运行/事件 | Bar Replay | 重载快照 | 证据 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 2026-07-26 | 待测 | 待测 | 方向感知离开判定 (ADR 0046) + MACD 前缀和 + 尾部隔离视图拷贝 + 证据身份含结构时间；本地契约 25/25 | 待测 | 待按下方观察清单复核：一类点落在趋势极值、三类点提前一个摆动至首次回试端点、离开失败并入波动区间、面板状态与点位一致 | 未执行 | 未执行 | 无 |
 | 2026-07-16 | SKHYNIXUSDT.P / Bitget | 5m | 标准、唯一课件新笔、4 自动参考、2,000 K；按引擎 dirty replay、压缩生命周期事件 | 通过；官方接受 3,001 行源码 | 通过；等待约 23 秒后无编译/运行/内存错误，面板显示合成 K `5224`、笔 `328`、线段约 `39/1`、历史生命周期事件 `4463` | 环境受限；Basic 计划要求 Premium，未执行回放 | 通过；页面重载并再次等待约 25 秒后结构与事件面板恢复，无 `Runtime error` 或 `Memory limits exceeded` | `test-evidence/2026-07-16-skhynix-5m-course-v2-memory-reload.png` |
 | 2026-07-16 | SKHYNIXUSDT.P / Bitget | 5m | 标准、唯一课件新笔、4 自动参考、2,000 K；历史逐事件 replay | 通过 | 通过；官方接受 2,990 行源码，焦点与参考周期历史增量重建启用，等待 5 秒无编译/运行错误；旧指标面板遮挡，未把不可读计数作为证据 | 未执行 | 未执行；Chrome 页面接管超时 | `test-evidence/2026-07-16-skhynix-5m-course-v2-lifecycle-replay.png` |
 | 2026-07-16 | SNDKUSDT.P / Bitget | 5m | 标准、唯一课件新笔、4 自动参考、2,000 K | 通过 | 通过；面板使用 `B/S/T0-T3`，活动结构与不可变历史事件初始化为 `1281 / 1281` | 环境受限；Basic 计划弹窗要求 Premium，未执行回放 | 通过；重载后结构、事件计数仍为 `1281 / 1281`，无编译/运行错误 | `test-evidence/2026-07-16-sndkusdt-5m-course-v2.png`、`test-evidence/2026-07-16-sndkusdt-5m-course-v2-reload.png`、`test-evidence/2026-07-16-course-v2-replay-plan-limit.png` |
 
-本地 `python3 -m unittest discover -s tests -v` 当前为 `17/17` 通过，覆盖唯一新笔、原始 K 线覆盖区间真实极值、真实线段区间、`DD/GG`、递归边界、升级不自举、历史事件 replay、稳定因果来源 ID、阶段迁移身份、二类点结构失效、实时预览隔离、索引化 reconcile、趋背与三类点契约。它是源码契约检查，不替代 Pine 合成夹具或官方运行时。
+本地 `python3 -m unittest discover -s tests -v` 当前为 `25/25` 通过，在原 22 项之上新增方向感知离开判定 (ADR 0046)、MACD 前缀和与证据身份含结构时间三项契约。它是源码契约检查，不替代 Pine 合成夹具或官方运行时。
 
 当前尚未达到全部发布门禁：逐事件 morphology/走势/点位 Pine 夹具、可用计划下的 Bar Replay、重载前后完整事件 ID 快照，以及完整跨市场矩阵仍待完成。
 
