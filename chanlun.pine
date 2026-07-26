@@ -541,8 +541,11 @@ f_update_strokes(array<Fractal> endpoints, array<Unit> strokes, Fractal newFract
             bool moreExtreme = newFractal.kind == 1 ? newFractal.price > lastEndpoint.price : newFractal.price < lastEndpoint.price
             bool equalAndLater = newFractal.price == lastEndpoint.price and newFractal.structureTime >= lastEndpoint.structureTime
             if moreExtreme or equalAndLater
+                // 候选延伸只移动末端候选，不改变任何已确认前缀，因此不标记
+                // 结构变化：历史回放只在新笔或确认边界处重建，末端候选的
+                // 最终状态由下一个结构事件或活动 K 线全量重建覆盖。这是
+                // 免费计划 20 秒计算预算下保留确认真实性的裁剪 (ADR 0047)。
                 array.set(endpoints, endpointCount - 1, newFractal)
-                changed := true
                 int strokeCount = array.size(strokes)
                 if strokeCount > 0
                     Unit lastStroke = array.get(strokes, strokeCount - 1)

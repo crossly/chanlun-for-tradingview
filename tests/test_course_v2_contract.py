@@ -290,6 +290,26 @@ class CourseV2ContractTest(unittest.TestCase):
             SOURCE,
         )
 
+    def test_candidate_extension_does_not_trigger_historical_replay(self) -> None:
+        # ADR 0047: moving the terminal candidate endpoint must not mark
+        # structures dirty; historical replay rebuilds only on new-stroke
+        # or confirmation boundaries to fit the free-plan time budget.
+        stroke_builder = re.search(
+            r"f_update_strokes\(.*?\) =>(?P<body>.*?)\n\nf_extend_terminal_candidate",
+            SOURCE,
+            flags=re.DOTALL,
+        )
+        self.assertIsNotNone(stroke_builder)
+        body = stroke_builder.group("body")
+        self.assertEqual(body.count("changed := true"), 2)
+        more_extreme_branch = re.search(
+            r"if moreExtreme or equalAndLater(?P<branch>.*?)\n        else\n",
+            body,
+            flags=re.DOTALL,
+        )
+        self.assertIsNotNone(more_extreme_branch)
+        self.assertNotIn("changed := true", more_extreme_branch.group("branch"))
+
 
 if __name__ == "__main__":
     unittest.main()
