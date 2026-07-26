@@ -58,6 +58,11 @@ bool alertResonance = input.bool(true, "共振", group = GROUP_ALERT)
 bool alertNesting = input.bool(true, "区间套", group = GROUP_ALERT)
 bool alertScenario = input.bool(false, "情景事件", group = GROUP_ALERT)
 bool alertCandidates = input.bool(false, "候选事件", group = GROUP_ALERT)
+// 历史生命周期账本在每个历史结构边界全量重建递归并收集带长字符串 ID 的
+// 结构快照，事件数组只增不减；免费计划的 20 秒 / 内存预算无法同时承担
+// 该账本与四参考周期，默认关闭 (ADR 0048)。关闭时确认结构、买卖点、
+// 证据、共振与提醒完全不受影响，只是不保留逐事件历史迁移记录。
+bool enableLifecycleHistory = input.bool(false, "历史生命周期账本（重负载）", group = GROUP_ALERT)
 
 // -----------------------------------------------------------------------------
 // Core structure types
@@ -2134,10 +2139,12 @@ referenceEngine1 := f_ingest_reference(referenceEnabled1, referenceSourceTime1, 
 referenceEngine2 := f_ingest_reference(referenceEnabled2, referenceSourceTime2, referenceSourceHigh2, referenceSourceLow2, referenceSourceDif2, referenceSourceHist2, time, referenceEngine2, true)
 referenceEngine3 := f_ingest_reference(referenceEnabled3, referenceSourceTime3, referenceSourceHigh3, referenceSourceLow3, referenceSourceDif3, referenceSourceHist3, time, referenceEngine3, true)
 referenceEngine4 := f_ingest_reference(referenceEnabled4, referenceSourceTime4, referenceSourceHigh4, referenceSourceLow4, referenceSourceDif4, referenceSourceHist4, time, referenceEngine4, true)
-bool referenceStructuresDirty1 = referenceEngine1.state.structuresDirty
-bool referenceStructuresDirty2 = referenceEngine2.state.structuresDirty
-bool referenceStructuresDirty3 = referenceEngine3.state.structuresDirty
-bool referenceStructuresDirty4 = referenceEngine4.state.structuresDirty
+// 历史阶段的逐边界重建只服务于生命周期快照；账本关闭时参考结构
+// 推迟到最后一根 K 线一次性重建，证据、共振与提醒不受影响。
+bool referenceStructuresDirty1 = referenceEngine1.state.structuresDirty and enableLifecycleHistory
+bool referenceStructuresDirty2 = referenceEngine2.state.structuresDirty and enableLifecycleHistory
+bool referenceStructuresDirty3 = referenceEngine3.state.structuresDirty and enableLifecycleHistory
+bool referenceStructuresDirty4 = referenceEngine4.state.structuresDirty and enableLifecycleHistory
 if referenceStructuresDirty1
     referenceEngine1 := f_build_reference_engine(referenceEngine1)
 if referenceStructuresDirty2
@@ -2246,7 +2253,7 @@ if confirmedRawBar and (na(lastProcessedRawIndex) or bar_index != lastProcessedR
             bool structuresChanged = f_update_strokes(strokeEndpoints, strokes, confirmedFractal, posAreaCums, negAreaCums, difValues, true)
             focusStructuresDirty := focusStructuresDirty or structuresChanged
 
-bool focusReplayDirty = confirmedRawBar and focusStructuresDirty
+bool focusReplayDirty = confirmedRawBar and focusStructuresDirty and enableLifecycleHistory
 if focusReplayDirty
     [historyTrendT0, historyTrendT1, historyTrendT2, historyTrendT3] = f_build_focus_hierarchy(strokes, posAreaCums, negAreaCums, difValues, segmentsS, movementsT0, movementsT1, movementsT2, movementsT3, centersT0, centersT1, centersT2, centersT3, divergencesT0, divergencesT1, divergencesT2, divergencesT3, pointsT0, pointsT1, pointsT2, pointsT3)
     trendT0 := historyTrendT0
@@ -2277,6 +2284,16 @@ if referenceStructuresDirty4
     lifecycleEvents := f_reconcile_lifecycle(previousReferenceStructureSnapshots4, currentStructureSnapshots, lifecycleEvents)
 
 if barstate.islast
+    // 账本关闭时参考结构在此处一次性重建；dirty 标记只在重建时清除，
+    // 因此实时阶段仍然只随参考周期收盘重建一次。
+    if referenceEnabled1 and referenceEngine1.state.structuresDirty and not enableLifecycleHistory
+        referenceEngine1 := f_build_reference_engine(referenceEngine1)
+    if referenceEnabled2 and referenceEngine2.state.structuresDirty and not enableLifecycleHistory
+        referenceEngine2 := f_build_reference_engine(referenceEngine2)
+    if referenceEnabled3 and referenceEngine3.state.structuresDirty and not enableLifecycleHistory
+        referenceEngine3 := f_build_reference_engine(referenceEngine3)
+    if referenceEnabled4 and referenceEngine4.state.structuresDirty and not enableLifecycleHistory
+        referenceEngine4 := f_build_reference_engine(referenceEngine4)
     viewSyntheticBars := f_tail_isolated_kbars(syntheticBars)
     viewStrokeEndpoints := array.copy(strokeEndpoints)
     viewStrokes := f_tail_isolated_units(strokes)
@@ -2318,15 +2335,16 @@ if barstate.islast
     if na(reliableStartTime) and bar_index >= MACD_WARMUP_BARS and f_has_reliable_confirmed_center(segmentsS, MACD_WARMUP_BARS)
         reliableStartTime := time
     array.clear(currentStructureSnapshots)
-    f_collect_focus_snapshots(currentStructureSnapshots, timeframe.period, viewStrokeEndpoints, viewStrokes, segmentsS, movementsT0, movementsT1, movementsT2, movementsT3, centersT0, centersT1, centersT2, centersT3, divergencesT0, divergencesT1, divergencesT2, divergencesT3, pointsT0, pointsT1, pointsT2, pointsT3, noLowerPointSources, trendT0, trendT1, trendT2, trendT3)
-    if referenceEnabled1
-        f_collect_reference_snapshots(currentStructureSnapshots, referenceTimeframe1, referenceEngine1)
-    if referenceEnabled2
-        f_collect_reference_snapshots(currentStructureSnapshots, referenceTimeframe2, referenceEngine2)
-    if referenceEnabled3
-        f_collect_reference_snapshots(currentStructureSnapshots, referenceTimeframe3, referenceEngine3)
-    if referenceEnabled4
-        f_collect_reference_snapshots(currentStructureSnapshots, referenceTimeframe4, referenceEngine4)
+    if enableLifecycleHistory
+        f_collect_focus_snapshots(currentStructureSnapshots, timeframe.period, viewStrokeEndpoints, viewStrokes, segmentsS, movementsT0, movementsT1, movementsT2, movementsT3, centersT0, centersT1, centersT2, centersT3, divergencesT0, divergencesT1, divergencesT2, divergencesT3, pointsT0, pointsT1, pointsT2, pointsT3, noLowerPointSources, trendT0, trendT1, trendT2, trendT3)
+        if referenceEnabled1
+            f_collect_reference_snapshots(currentStructureSnapshots, referenceTimeframe1, referenceEngine1)
+        if referenceEnabled2
+            f_collect_reference_snapshots(currentStructureSnapshots, referenceTimeframe2, referenceEngine2)
+        if referenceEnabled3
+            f_collect_reference_snapshots(currentStructureSnapshots, referenceTimeframe3, referenceEngine3)
+        if referenceEnabled4
+            f_collect_reference_snapshots(currentStructureSnapshots, referenceTimeframe4, referenceEngine4)
     array.clear(activeEvidence)
     f_collect_layer_evidence(activeEvidence, 0, timeframe.period, segmentsS, divergencesT0, pointsT0)
     f_collect_layer_evidence(activeEvidence, 0, timeframe.period, movementsT0, divergencesT1, pointsT1)
@@ -2889,7 +2907,8 @@ if barstate.islast
     f_panel_cell(statusPanel, 1, 28, str.tostring(array.size(structureLines)) + "/" + str.tostring(array.size(structureBoxes)) + "/" + str.tostring(array.size(structureLabels)), text_color = foregroundColor)
     f_panel_cell(statusPanel, 0, 29, "活动结构 / 历史事件", text_color = foregroundColor)
     string engineStatus = not standardChart ? "确认/参考均已停止" : barstate.isconfirmed ? "收盘确认状态" : "活动K候选预览·确认冻结"
-    f_panel_cell(statusPanel, 1, 29, str.tostring(array.size(currentStructureSnapshots)) + " / " + str.tostring(array.size(lifecycleEvents)) + " · " + engineStatus, text_color = standardChart ? foregroundColor : warningColor)
+    string lifecycleStatus = enableLifecycleHistory ? str.tostring(array.size(currentStructureSnapshots)) + " / " + str.tostring(array.size(lifecycleEvents)) : "账本关闭"
+    f_panel_cell(statusPanel, 1, 29, lifecycleStatus + " · " + engineStatus, text_color = standardChart ? foregroundColor : warningColor)
     f_panel_cell(statusPanel, 0, 30, "参考 1", text_color = foregroundColor)
     f_panel_cell(statusPanel, 1, 30, f_reference_summary(referenceRequested1, referenceEnabled1, referenceTimeframe1, referenceEngine1), text_color = layer1Color)
     f_panel_cell(statusPanel, 0, 31, "参考 2", text_color = foregroundColor)

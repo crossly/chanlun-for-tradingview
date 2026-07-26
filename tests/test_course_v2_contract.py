@@ -290,6 +290,19 @@ class CourseV2ContractTest(unittest.TestCase):
             SOURCE,
         )
 
+    def test_lifecycle_history_is_gated_and_defaults_off(self) -> None:
+        # ADR 0048: the append-only lifecycle ledger with per-boundary
+        # full rebuilds does not fit the free-plan time/memory budget
+        # together with four reference timeframes, so it defaults off.
+        self.assertIn('bool enableLifecycleHistory = input.bool(false, "历史生命周期账本（重负载）"', SOURCE)
+        self.assertIn("bool focusReplayDirty = confirmedRawBar and focusStructuresDirty and enableLifecycleHistory", SOURCE)
+        self.assertIn("referenceEngine1.state.structuresDirty and enableLifecycleHistory", SOURCE)
+        self.assertIn("referenceEngine4.state.structuresDirty and enableLifecycleHistory", SOURCE)
+        # with the ledger off, reference structures rebuild once on the
+        # last bar instead of on every historical boundary
+        self.assertIn("referenceEngine1.state.structuresDirty and not enableLifecycleHistory", SOURCE)
+        self.assertIn("referenceEngine4.state.structuresDirty and not enableLifecycleHistory", SOURCE)
+
     def test_candidate_extension_does_not_trigger_historical_replay(self) -> None:
         # ADR 0047: moving the terminal candidate endpoint must not mark
         # structures dirty; historical replay rebuilds only on new-stroke
