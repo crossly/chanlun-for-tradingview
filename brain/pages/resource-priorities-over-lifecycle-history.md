@@ -5,7 +5,7 @@ category: decision
 status: active
 tags: [performance, rendering, lifecycle, free-plan]
 created: "2026-07-27T13:14:28"
-updated: "2026-07-27T17:28:07"
+updated: "2026-07-27T20:26:43"
 ---
 
 ## compiled_truth
@@ -87,3 +87,15 @@ TradingView 的编译 token、历史执行时间、实时 tick 时间、内存�
   summary: "优化提交 958b1d1 已通过 TradingView 官方 Pine 编译"
   source: "2026-07-27 用户实测"
   affects: [current-pine-observable-baseline]
+
+- time: 2026-07-27T20:15:21
+  kind: evidence
+  summary: "展示层新增投影脏键：同一根 K 内仅当焦点结构尾部、强度或层级投影变化时删除重建 line/label/box/polyline；买卖点标签同时受 detailBars 限制。焦点数组复制和 T0-T3 全量重建仍是下一阶段热点。"
+  source: "2026-07-27 chanlun.pine 绘图优化与官方编译"
+  affects: [resource-priorities-over-lifecycle-history]
+
+- time: 2026-07-27T20:26:43
+  kind: reversal
+  summary: "撤回跨 tick 绘图投影脏键。Pine 在实时柱每次重算前 rollback 临时绘图对象，而 varip previousDrawingStateKey 逃逸 rollback，导致下一 tick 跳过重画并让线条一闪即逝。恢复每次 barstate.islast 执行重画；后续性能优化必须使用可持续对象池并在每 tick 重放 setter，不能用 varip 跳过绘图。"
+  source: "2026-07-27 用户图表运行报告与 TradingView Pine 官方执行模型"
+  affects: [resource-priorities-over-lifecycle-history, current-pine-observable-baseline]

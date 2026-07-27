@@ -5,7 +5,7 @@ category: decision
 status: active
 tags: [algorithm, performance, regression]
 created: "2026-07-27T17:15:29"
-updated: "2026-07-27T17:15:29"
+updated: "2026-07-27T20:15:06"
 ---
 
 ## compiled_truth
@@ -32,3 +32,15 @@ updated: "2026-07-27T17:15:29"
   summary: "确立当前生产 Pine 行为作为算法与性能优化的唯一回归基线"
   source: "2026-07-27 用户决定与当前 chanlun.pine"
   affects: [current-pine-observable-baseline]
+
+- time: 2026-07-27T19:12:03
+  kind: evidence
+  summary: "第一性审查发现：展示资源裁剪会改写执行状态；升级确认的一类点可能生成确认时间倒置的二类点；背驰冻结分支跳过后续失效扫描；失效状态迁移未进入提醒去重身份；参考周期主证据与焦点操作摘要可能错配。"
+  source: "2026-07-27 chanlun.pine 第一性代码审查"
+  affects: [current-pine-observable-baseline, resource-priorities-over-lifecycle-history]
+
+- time: 2026-07-27T20:15:06
+  kind: evidence
+  summary: "第一性状态机修复已落地：展示裁剪不再门控执行真值；升级确认二类点使用不早于一类点的首次可知时间；反向证明只跳过证明单元而不终止背驰失效扫描；提醒身份覆盖失效候选与失效；自动操作摘要保留参考 market/TF/Tn；绘图仅在投影脏键变化时重建。源码契约 33/33，TradingView 官方 translate_light 编译无 errors。"
+  source: "2026-07-27 chanlun.pine 实现、本地 unittest、TradingView 官方编译响应"
+  affects: [current-pine-observable-baseline, resource-priorities-over-lifecycle-history]

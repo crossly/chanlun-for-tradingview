@@ -138,12 +138,81 @@ class CourseV2ContractTest(unittest.TestCase):
         self.assertNotIn("referencePreview", SOURCE)
         self.assertNotIn("f_copy_reference_engine", SOURCE)
 
-    def test_completion_requires_a_qualified_reverse_component(self) -> None:
+    def test_completion_proof_does_not_disable_later_divergence_expiry(self) -> None:
         self.assertIn("f_is_qualified_reverse_component", SOURCE)
         self.assertIn("proof.layer == expectedLayer", SOURCE)
         self.assertIn("proof.lastChild - proof.firstChild + 1 >= 3", SOURCE)
-        self.assertIn("bool endpointFrozenByReverse", SOURCE)
-        self.assertIn("if current.confirmed and not endpointFrozenByReverse", SOURCE)
+        self.assertNotIn("if current.confirmed and not endpointFrozenByReverse", SOURCE)
+        self.assertIn("if current.confirmed", SOURCE)
+        self.assertIn("scanFrom := endpointFrozenByReverse ? completionProofIndex + 1 : scanFrom", SOURCE)
+
+    def test_promotion_confirmed_second_point_preserves_causal_time(self) -> None:
+        point_builder = re.search(
+            r"f_build_points\(.*?\) =>(?P<body>.*?)\n\nf_event_prefix",
+            SOURCE,
+            flags=re.DOTALL,
+        )
+        self.assertIsNotNone(point_builder)
+        body = point_builder.group("body")
+        self.assertIn("math.max(pullbackKnownTime, firstPoint.confirmationTime)", body)
+        self.assertIn("pointConfirmationTime == pullbackKnownTime", body)
+        self.assertIn("firstPoint.confirmationPrice", body)
+
+    def test_evidence_alert_identity_covers_invalidation_lifecycle(self) -> None:
+        self.assertIn('evidence.invalidationCandidate ? "invalidation_candidate"', SOURCE)
+        self.assertIn('not na(evidence.evidenceEndTime) ? "invalidated"', SOURCE)
+        self.assertIn("f_evidence_status_key", SOURCE)
+        self.assertIn("transitionEvidence", SOURCE)
+        self.assertNotIn("f_event_status_key(evidence.eventId, evidence.confirmed)", SOURCE)
+
+    def test_execution_policy_derives_state_without_presentation_inputs(self) -> None:
+        for constant in (
+            "EXECUTION_DATA_INSUFFICIENT",
+            "EXECUTION_OBSERVE",
+            "EXECUTION_WAIT_CONFIRMATION",
+            "EXECUTION_READY",
+            "EXECUTION_CONFLICT",
+        ):
+            self.assertIn(f"int {constant}", SOURCE)
+
+        builder = re.search(
+            r"f_build_execution_state\(.*?\) =>(?P<body>.*?)\n\nf_execution_status_summary",
+            SOURCE,
+            flags=re.DOTALL,
+        )
+        self.assertIsNotNone(builder)
+        body = builder.group("body")
+        self.assertIn("if reliable", body)
+        self.assertNotIn("resourceClipped", body)
+        self.assertIn("primary.confirmed and primary.kind >= 11 and not primary.invalidationCandidate", body)
+        self.assertIn("candidate.marketTimeframe == primary.marketTimeframe and candidate.layer == primary.layer", body)
+        self.assertIn("candidate.confirmed and candidate.direction == -primary.direction", body)
+        self.assertIn("math.abs(primary.confirmationPrice - primary.invalidationPrice)", body)
+        self.assertNotIn("f_build_points(", body)
+        self.assertNotIn("f_build_divergences(", body)
+
+        self.assertIn("ExecutionState executionState = f_build_execution_state(activeEvidence, executionReliable)", SOURCE)
+        self.assertNotIn("f_build_execution_state(activeEvidence, executionReliable, resourceClipped)", SOURCE)
+        self.assertIn("绘图裁剪不改变结构状态", SOURCE)
+
+    def test_operation_level_view_preserves_market_and_layer_context(self) -> None:
+        self.assertIn('string operationLevel = input.string("自动", "操作级别"', SOURCE)
+        self.assertIn('"自动", "T0", "T1", "T2", "T3"', SOURCE)
+        self.assertIn("int automaticOperationMarket = 0", SOURCE)
+        self.assertIn("automaticOperationMarket := primary.market", SOURCE)
+        self.assertIn("int operationMarket = operationLevel == \"自动\" ? automaticOperationMarket : 0", SOURCE)
+        self.assertIn("f_reference_trend_summary", SOURCE)
+        self.assertIn("f_reference_divergence_summary", SOURCE)
+        self.assertIn("f_reference_point_summary", SOURCE)
+        self.assertIn('"操作结构"', SOURCE)
+        self.assertIn('"操作点位"', SOURCE)
+        self.assertIn("operationLabel + \"·\" + operationTrend + \" | \" + operationDivergence", SOURCE)
+
+    def test_realtime_drawings_rebuild_after_each_rollback(self) -> None:
+        self.assertNotIn("f_drawing_state_key", SOURCE)
+        self.assertNotIn("varip string previousDrawingStateKey", SOURCE)
+        self.assertNotIn("bool drawingsDirty", SOURCE)
+        self.assertIn("if barstate.islast\n    int oldLineCount", SOURCE)
 
     def test_level_promotion_completes_state_without_bootstrapping_components(self) -> None:
         self.assertIn("int promotionConfirmationTime", SOURCE)
@@ -287,38 +356,7 @@ class CourseV2ContractTest(unittest.TestCase):
         self.assertNotIn("previewPendingHighs", SOURCE)
         self.assertNotIn("previewPendingLows", SOURCE)
 
-    def test_execution_policy_derives_state_without_changing_structure_truth(self) -> None:
-        for constant in (
-            "EXECUTION_DATA_INSUFFICIENT",
-            "EXECUTION_OBSERVE",
-            "EXECUTION_WAIT_CONFIRMATION",
-            "EXECUTION_READY",
-            "EXECUTION_CONFLICT",
-        ):
-            self.assertIn(f"int {constant}", SOURCE)
 
-        builder = re.search(
-            r"f_build_execution_state\(.*?\) =>(?P<body>.*?)\n\nf_execution_status_summary",
-            SOURCE,
-            flags=re.DOTALL,
-        )
-        self.assertIsNotNone(builder)
-        body = builder.group("body")
-        self.assertIn("if reliable and not resourceClipped", body)
-        self.assertIn("primary.confirmed and primary.kind >= 11 and not primary.invalidationCandidate", body)
-        self.assertIn("candidate.marketTimeframe == primary.marketTimeframe and candidate.layer == primary.layer", body)
-        self.assertIn("candidate.confirmed and candidate.direction == -primary.direction", body)
-        self.assertIn("math.abs(primary.confirmationPrice - primary.invalidationPrice)", body)
-        self.assertNotIn("f_build_points(", body)
-        self.assertNotIn("f_build_divergences(", body)
-
-    def test_trading_dashboard_discloses_execution_state_and_risk_boundary(self) -> None:
-        self.assertIn("ExecutionState executionState = f_build_execution_state(activeEvidence, executionReliable, resourceClipped)", SOURCE)
-        self.assertIn('"结构状态"', SOURCE)
-        self.assertIn('"主要证据"', SOURCE)
-        self.assertIn('"同 TF 同 Tn 冲突"', SOURCE)
-        self.assertIn('"失效 / 风险距离"', SOURCE)
-        self.assertIn("风险距离仅为确认价与结构失效边界的价格距离；不表示仓位或收益。", SOURCE)
 
     def test_trading_dashboard_discloses_confirmed_cross_timeframe_opposition(self) -> None:
         self.assertIn("bool crossTimeframeOpposition = false", SOURCE)
@@ -405,13 +443,6 @@ class CourseV2ContractTest(unittest.TestCase):
         self.assertIn('"\\n离开失败: "', SOURCE)
         self.assertIn("+ departureText + promotionText", SOURCE)
 
-    def test_operation_level_view_selects_one_structural_layer(self) -> None:
-        self.assertIn('string operationLevel = input.string("自动", "操作级别"', SOURCE)
-        self.assertIn('"自动", "T0", "T1", "T2", "T3"', SOURCE)
-        self.assertIn("int operationLayer = operationLevel == \"自动\" ? automaticOperationLayer", SOURCE)
-        self.assertIn('"操作结构"', SOURCE)
-        self.assertIn('"操作点位"', SOURCE)
-        self.assertIn("operationLabel + \"·\" + operationTrend + \" | \" + operationDivergence", SOURCE)
 
 
 

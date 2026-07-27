@@ -1,4 +1,8 @@
 //@version=6
+// [INPUT]: 依赖 TradingView 标准 OHLC、已收盘参考周期数据与 Pine v6 绘图/提醒能力
+// [OUTPUT]: 提供 course-v2 缠论结构、证据、交易状态、可视化与 JSON 提醒
+// [POS]: 项目唯一运行交付物，串联合成 K、分型、笔、线段、走势递归及展示集成
+// [PROTOCOL]: 变更时更新此头部，然后检查 GEMINI.md
 // SPDX-License-Identifier: AGPL-3.0-only
 // Strict recursive Chanlun indicator for TradingView.
 
@@ -1057,8 +1061,9 @@ f_build_divergences(array<Unit> units, array<Center> centers, array<Divergence> 
             if completionProofIndex < array.size(units)
                 Unit completionProof = array.get(units, completionProofIndex)
                 endpointFrozenByReverse := f_is_qualified_reverse_component(completionProof, layer, current.direction)
-            if current.confirmed and not endpointFrozenByReverse
+            if current.confirmed
                 int scanFrom = current.leavingUnit + 1
+                scanFrom := endpointFrozenByReverse ? completionProofIndex + 1 : scanFrom
                 if current.centerIndex < array.size(centers)
                     Center sourceCenter = array.get(centers, current.centerIndex)
                     scanFrom := na(sourceCenter.retestChild) ? scanFrom : math.max(scanFrom, sourceCenter.retestChild + 1)
@@ -1249,12 +1254,14 @@ f_build_points(array<Unit> units, array<Center> centers, array<Divergence> diver
                     Unit pullback = array.get(units, pullbackIndex)
                     bool correctSequence = reverseAdvance.direction == firstPoint.direction and pullback.direction == -firstPoint.direction
                     if correctSequence
-                        bool pointConfirmed = pullback.confirmed
-                        int pointConfirmationTime = pointConfirmed ? f_unit_confirmation_time(pullback) : na
-                        float pointConfirmationPrice = pointConfirmed ? pullback.endPrice : na
-                        int evidenceStartIndex = pullback.endIndex
+                        int pullbackKnownTime = pullback.confirmed ? f_unit_confirmation_time(pullback) : na
+                        bool pointConfirmed = pullback.confirmed and not na(firstPoint.confirmationTime)
+                        int pointConfirmationTime = pointConfirmed ? math.max(pullbackKnownTime, firstPoint.confirmationTime) : na
+                        bool confirmedAtPullback = pointConfirmed and pointConfirmationTime == pullbackKnownTime
+                        float pointConfirmationPrice = pointConfirmed ? (confirmedAtPullback ? pullback.endPrice : firstPoint.confirmationPrice) : na
+                        int evidenceStartIndex = pointConfirmed ? (confirmedAtPullback ? pullback.endIndex : firstPoint.evidenceStartIndex) : pullback.endIndex
                         int evidenceStartTime = pointConfirmed ? pointConfirmationTime : pullback.endTime
-                        int delayBars = pointConfirmed ? math.max(0, pullback.endIndex - firstPoint.structureIndex) : na
+                        int delayBars = pointConfirmed ? math.max(0, evidenceStartIndex - firstPoint.structureIndex) : na
                         float relativePrice = pullback.endPrice
                         int relativePosition = relativePrice == firstPoint.structurePrice ? 0 : firstPoint.direction == 1 ? (relativePrice > firstPoint.structurePrice ? 1 : -1) : (relativePrice < firstPoint.structurePrice ? 1 : -1)
                         int firstKnownTime = f_previous_point_known(previousPoints, layer, 2, firstPoint.direction, pullback.endTime)
@@ -1384,15 +1391,16 @@ f_upsert_evidence(array<Evidence> ledger, Evidence incoming) =>
         if incoming.evidenceStartTime >= current.evidenceStartTime
             array.set(ledger, replaceIndex, incoming)
 
-f_collect_layer_evidence(array<Evidence> ledger, int marketId, string marketTimeframe, array<Unit> units, array<Divergence> divergences, array<BuySellPoint> points) =>
+f_collect_layer_evidence(array<Evidence> activeLedger, array<Evidence> transitionLedger, int marketId, string marketTimeframe, array<Unit> units, array<Divergence> divergences, array<BuySellPoint> points) =>
     int divergenceCount = array.size(divergences)
     if divergenceCount > 0
         for divergenceIndex = 0 to divergenceCount - 1
             Divergence current = array.get(divergences, divergenceIndex)
             bool active = current.confirmed ? current.valid : true
-            if active
+            bool invalidatedNow = current.confirmed and not current.valid and not na(current.evidenceEndTime) and current.evidenceEndTime >= time
+            if active or invalidatedNow
                 int evidenceDirection = -current.direction
-                int knownTime = current.confirmed ? current.confirmationTime : current.firstKnownTime
+                int knownTime = invalidatedNow ? current.evidenceEndTime : current.confirmed ? current.confirmationTime : current.firstKnownTime
                 float structureStartPrice = current.structurePrice
                 if current.leavingUnit >= 0 and current.leavingUnit < array.size(units)
                     Unit leaving = array.get(units, current.leavingUnit)
@@ -1401,26 +1409,33 @@ f_collect_layer_evidence(array<Evidence> ledger, int marketId, string marketTime
                 string eventId = f_event_id(marketTimeframe, current.layer, eventType, evidenceDirection, current.structureTime)
                 string movementContext = f_movement_context_id(marketTimeframe, current.layer, current.parentStartTime)
                 Evidence evidence = Evidence.new(marketId, marketTimeframe, current.layer, current.kind, evidenceDirection, current.confirmed, current.invalidationCandidate, current.centerIndex, current.parentStartTime, current.structureTime, current.confirmationTime, knownTime, current.evidenceStartTime, current.evidenceEndTime, current.structurePrice, structureStartPrice, current.confirmationPrice, current.invalidationPrice, movementContext, eventId)
-                f_upsert_evidence(ledger, evidence)
+                if active
+                    f_upsert_evidence(activeLedger, evidence)
+                else
+                    f_upsert_evidence(transitionLedger, evidence)
 
     int pointCount = array.size(points)
     if pointCount > 0
         for pointIndex = 0 to pointCount - 1
             BuySellPoint current = array.get(points, pointIndex)
             bool active = current.confirmed ? current.valid : true
-            if active
+            bool invalidatedNow = current.confirmed and not current.valid and not na(current.evidenceEndTime) and current.evidenceEndTime >= time
+            if active or invalidatedNow
                 int intervalStartTime = current.structureTime
                 float structureStartPrice = current.structurePrice
                 if current.structureUnit >= 0 and current.structureUnit < array.size(units)
                     Unit sourceUnit = array.get(units, current.structureUnit)
                     intervalStartTime := sourceUnit.startTime
                     structureStartPrice := sourceUnit.startPrice
-                int knownTime = current.confirmed ? current.confirmationTime : current.firstKnownTime
+                int knownTime = invalidatedNow ? current.evidenceEndTime : current.confirmed ? current.confirmationTime : current.firstKnownTime
                 string eventType = "point_" + str.tostring(current.pointClass)
                 string eventId = f_event_id(marketTimeframe, current.layer, eventType, current.direction, current.structureTime)
                 string movementContext = f_movement_context_id(marketTimeframe, current.layer, intervalStartTime)
                 Evidence evidence = Evidence.new(marketId, marketTimeframe, current.layer, 10 + current.pointClass, current.direction, current.confirmed, current.invalidationCandidate, current.sourceCenter, intervalStartTime, current.structureTime, current.confirmationTime, knownTime, current.evidenceStartTime, current.evidenceEndTime, current.structurePrice, structureStartPrice, current.confirmationPrice, current.invalidationPrice, movementContext, eventId)
-                f_upsert_evidence(ledger, evidence)
+                if active
+                    f_upsert_evidence(activeLedger, evidence)
+                else
+                    f_upsert_evidence(transitionLedger, evidence)
 
 f_collect_nesting_evidence(array<Evidence> ledger, string marketTimeframe, array<Unit> units, array<Divergence> divergences) =>
     int divergenceCount = array.size(divergences)
@@ -1684,6 +1699,12 @@ f_remember_event(array<string> emittedIds, string eventKey) =>
 f_event_status_key(string eventId, bool confirmed) =>
     eventId + "|status=" + (confirmed ? "confirmed" : "candidate")
 
+f_evidence_status(Evidence evidence) =>
+    not na(evidence.evidenceEndTime) ? "invalidated" : evidence.invalidationCandidate ? "invalidation_candidate" : evidence.confirmed ? "confirmed" : "candidate"
+
+f_evidence_status_key(Evidence evidence) =>
+    evidence.eventId + "|status=" + f_evidence_status(evidence)
+
 f_emit_once(array<string> emittedIds, string eventId, string payload) =>
     if not f_event_was_emitted(emittedIds, eventId)
         alert(payload, alert.freq_all)
@@ -1693,10 +1714,9 @@ f_emit_once(array<string> emittedIds, string eventId, string payload) =>
 
 f_evidence_payload(Evidence evidence) =>
     string eventType = evidence.kind == 1 ? "consolidation_divergence" : evidence.kind == 2 ? "trend_divergence" : evidence.kind == 11 ? "point_1" : evidence.kind == 12 ? "point_2" : "point_3"
-    string status = evidence.confirmed ? "confirmed" : "candidate"
-    string invalidationState = evidence.invalidationCandidate ? "invalidation_candidate" : "active"
-    string evidenceSummary = f_evidence_short(evidence) + ";invalidation=" + str.tostring(evidence.invalidationPrice, format.mintick) + ";context=" + invalidationState
-    string messageZh = f_evidence_short(evidence) + (evidence.confirmed ? " 已确认" : " 候选") + (evidence.invalidationCandidate ? "，当前价格越界但等待结构确认失效" : "")
+    string status = f_evidence_status(evidence)
+    string evidenceSummary = f_evidence_short(evidence) + ";invalidation=" + str.tostring(evidence.invalidationPrice, format.mintick) + ";context=" + status + ";transition_time=" + f_json_int(evidence.knownTime)
+    string messageZh = f_evidence_short(evidence) + (status == "invalidated" ? " 已失效" : status == "invalidation_candidate" ? " 已触及失效边界，等待结构确认" : status == "confirmed" ? " 已确认" : " 候选")
     f_json_payload(evidence.eventId, evidence.marketTimeframe, evidence.layer, evidence.movementContext, evidence.direction, eventType, status, evidence.structureTime, evidence.structurePrice, evidence.confirmationTime, evidence.confirmationPrice, evidence.sourceIndex, evidenceSummary, messageZh)
 
 f_process_reference_bar(bool enabled, int sourceTime, float sourceHigh, float sourceLow, float sourceDif, float sourceHist, int knownTime, ReferenceState state, array<KBar> bars, array<Fractal> endpoints, array<Unit> strokes, array<float> pendingHighs, array<float> pendingLows, array<int> pendingIndices, array<int> pendingTimes, array<float> posAreaCums, array<float> negAreaCums, array<float> difValues, bool allowConfirmation) =>
@@ -1922,6 +1942,7 @@ var array<BuySellPoint> pointsT1 = array.new<BuySellPoint>()
 var array<BuySellPoint> pointsT2 = array.new<BuySellPoint>()
 var array<BuySellPoint> pointsT3 = array.new<BuySellPoint>()
 var array<Evidence> activeEvidence = array.new<Evidence>()
+var array<Evidence> transitionEvidence = array.new<Evidence>()
 var array<Evidence> nestingEvidence = array.new<Evidence>()
 var array<Resonance> activeResonances = array.new<Resonance>()
 var NestingState nestingState = na
@@ -2036,26 +2057,27 @@ if barstate.islast
     if na(reliableStartTime) and bar_index >= MACD_WARMUP_BARS
         reliableStartTime := f_reliable_confirmed_center_time(segmentsS, MACD_WARMUP_BARS)
     array.clear(activeEvidence)
-    f_collect_layer_evidence(activeEvidence, 0, timeframe.period, segmentsS, divergencesT0, pointsT0)
-    f_collect_layer_evidence(activeEvidence, 0, timeframe.period, movementsT0, divergencesT1, pointsT1)
-    f_collect_layer_evidence(activeEvidence, 0, timeframe.period, movementsT1, divergencesT2, pointsT2)
-    f_collect_layer_evidence(activeEvidence, 0, timeframe.period, movementsT2, divergencesT3, pointsT3)
+    array.clear(transitionEvidence)
+    f_collect_layer_evidence(activeEvidence, transitionEvidence, 0, timeframe.period, segmentsS, divergencesT0, pointsT0)
+    f_collect_layer_evidence(activeEvidence, transitionEvidence, 0, timeframe.period, movementsT0, divergencesT1, pointsT1)
+    f_collect_layer_evidence(activeEvidence, transitionEvidence, 0, timeframe.period, movementsT1, divergencesT2, pointsT2)
+    f_collect_layer_evidence(activeEvidence, transitionEvidence, 0, timeframe.period, movementsT2, divergencesT3, pointsT3)
     if referenceEnabled1
-        f_collect_layer_evidence(activeEvidence, 1, referenceTimeframe1, referenceEngine1.segmentsS, referenceEngine1.divergencesT0, referenceEngine1.pointsT0)
-        f_collect_layer_evidence(activeEvidence, 1, referenceTimeframe1, referenceEngine1.movementsT0, referenceEngine1.divergencesT1, referenceEngine1.pointsT1)
-        f_collect_layer_evidence(activeEvidence, 1, referenceTimeframe1, referenceEngine1.movementsT1, referenceEngine1.divergencesT2, referenceEngine1.pointsT2)
+        f_collect_layer_evidence(activeEvidence, transitionEvidence, 1, referenceTimeframe1, referenceEngine1.segmentsS, referenceEngine1.divergencesT0, referenceEngine1.pointsT0)
+        f_collect_layer_evidence(activeEvidence, transitionEvidence, 1, referenceTimeframe1, referenceEngine1.movementsT0, referenceEngine1.divergencesT1, referenceEngine1.pointsT1)
+        f_collect_layer_evidence(activeEvidence, transitionEvidence, 1, referenceTimeframe1, referenceEngine1.movementsT1, referenceEngine1.divergencesT2, referenceEngine1.pointsT2)
     if referenceEnabled2
-        f_collect_layer_evidence(activeEvidence, 2, referenceTimeframe2, referenceEngine2.segmentsS, referenceEngine2.divergencesT0, referenceEngine2.pointsT0)
-        f_collect_layer_evidence(activeEvidence, 2, referenceTimeframe2, referenceEngine2.movementsT0, referenceEngine2.divergencesT1, referenceEngine2.pointsT1)
-        f_collect_layer_evidence(activeEvidence, 2, referenceTimeframe2, referenceEngine2.movementsT1, referenceEngine2.divergencesT2, referenceEngine2.pointsT2)
+        f_collect_layer_evidence(activeEvidence, transitionEvidence, 2, referenceTimeframe2, referenceEngine2.segmentsS, referenceEngine2.divergencesT0, referenceEngine2.pointsT0)
+        f_collect_layer_evidence(activeEvidence, transitionEvidence, 2, referenceTimeframe2, referenceEngine2.movementsT0, referenceEngine2.divergencesT1, referenceEngine2.pointsT1)
+        f_collect_layer_evidence(activeEvidence, transitionEvidence, 2, referenceTimeframe2, referenceEngine2.movementsT1, referenceEngine2.divergencesT2, referenceEngine2.pointsT2)
     if referenceEnabled3
-        f_collect_layer_evidence(activeEvidence, 3, referenceTimeframe3, referenceEngine3.segmentsS, referenceEngine3.divergencesT0, referenceEngine3.pointsT0)
-        f_collect_layer_evidence(activeEvidence, 3, referenceTimeframe3, referenceEngine3.movementsT0, referenceEngine3.divergencesT1, referenceEngine3.pointsT1)
-        f_collect_layer_evidence(activeEvidence, 3, referenceTimeframe3, referenceEngine3.movementsT1, referenceEngine3.divergencesT2, referenceEngine3.pointsT2)
+        f_collect_layer_evidence(activeEvidence, transitionEvidence, 3, referenceTimeframe3, referenceEngine3.segmentsS, referenceEngine3.divergencesT0, referenceEngine3.pointsT0)
+        f_collect_layer_evidence(activeEvidence, transitionEvidence, 3, referenceTimeframe3, referenceEngine3.movementsT0, referenceEngine3.divergencesT1, referenceEngine3.pointsT1)
+        f_collect_layer_evidence(activeEvidence, transitionEvidence, 3, referenceTimeframe3, referenceEngine3.movementsT1, referenceEngine3.divergencesT2, referenceEngine3.pointsT2)
     if referenceEnabled4
-        f_collect_layer_evidence(activeEvidence, 4, referenceTimeframe4, referenceEngine4.segmentsS, referenceEngine4.divergencesT0, referenceEngine4.pointsT0)
-        f_collect_layer_evidence(activeEvidence, 4, referenceTimeframe4, referenceEngine4.movementsT0, referenceEngine4.divergencesT1, referenceEngine4.pointsT1)
-        f_collect_layer_evidence(activeEvidence, 4, referenceTimeframe4, referenceEngine4.movementsT1, referenceEngine4.divergencesT2, referenceEngine4.pointsT2)
+        f_collect_layer_evidence(activeEvidence, transitionEvidence, 4, referenceTimeframe4, referenceEngine4.segmentsS, referenceEngine4.divergencesT0, referenceEngine4.pointsT0)
+        f_collect_layer_evidence(activeEvidence, transitionEvidence, 4, referenceTimeframe4, referenceEngine4.movementsT0, referenceEngine4.divergencesT1, referenceEngine4.pointsT1)
+        f_collect_layer_evidence(activeEvidence, transitionEvidence, 4, referenceTimeframe4, referenceEngine4.movementsT1, referenceEngine4.divergencesT2, referenceEngine4.pointsT2)
     f_build_resonances(activeEvidence, activeResonances)
     array.clear(nestingEvidence)
     f_collect_nesting_evidence(nestingEvidence, timeframe.period, segmentsS, divergencesT0)
@@ -2074,13 +2096,18 @@ if barstate.islast
 
 if barstate.islast and barstate.isrealtime and standardChart
     int evidenceCountForAlerts = array.size(activeEvidence)
+    int transitionCountForAlerts = array.size(transitionEvidence)
     int resonanceCountForAlerts = array.size(activeResonances)
     int scenarioCountForAlerts = array.size(activeScenarios)
     if not alertBaselineReady
         if evidenceCountForAlerts > 0
             for evidenceIndex = 0 to evidenceCountForAlerts - 1
                 Evidence evidence = array.get(activeEvidence, evidenceIndex)
-                f_remember_event(emittedEventIds, f_event_status_key(evidence.eventId, evidence.confirmed))
+                f_remember_event(emittedEventIds, f_evidence_status_key(evidence))
+        if transitionCountForAlerts > 0
+            for transitionIndex = 0 to transitionCountForAlerts - 1
+                Evidence transition = array.get(transitionEvidence, transitionIndex)
+                f_remember_event(emittedEventIds, f_evidence_status_key(transition))
         if resonanceCountForAlerts > 0
             for resonanceIndex = 0 to resonanceCountForAlerts - 1
                 Resonance resonance = array.get(activeResonances, resonanceIndex)
@@ -2099,8 +2126,15 @@ if barstate.islast and barstate.isrealtime and standardChart
                 bool categoryEnabled = evidence.kind <= 2 ? alertDivergence : alertBuySell
                 bool statusEnabled = evidence.confirmed or alertCandidates
                 bool newlyKnown = not na(evidence.knownTime) and evidence.knownTime >= time
-                if categoryEnabled and statusEnabled and newlyKnown
-                    f_emit_once(emittedEventIds, f_event_status_key(evidence.eventId, evidence.confirmed), f_evidence_payload(evidence))
+                if categoryEnabled and statusEnabled and (newlyKnown or evidence.invalidationCandidate)
+                    f_emit_once(emittedEventIds, f_evidence_status_key(evidence), f_evidence_payload(evidence))
+        if transitionCountForAlerts > 0
+            for transitionIndex = 0 to transitionCountForAlerts - 1
+                Evidence transition = array.get(transitionEvidence, transitionIndex)
+                bool categoryEnabled = transition.kind <= 2 ? alertDivergence : alertBuySell
+                bool newlyKnown = not na(transition.knownTime) and transition.knownTime >= time
+                if categoryEnabled and newlyKnown
+                    f_emit_once(emittedEventIds, f_evidence_status_key(transition), f_evidence_payload(transition))
 
         if alertResonance and resonanceCountForAlerts > 0
             for resonanceIndex = 0 to resonanceCountForAlerts - 1
@@ -2226,6 +2260,15 @@ f_reference_summary(bool requested, bool enabled, string referenceTimeframe, Ref
         result := referenceTimeframe + "·确K" + str.tostring(engine.state.nextIndex) + "·B/S/T0=" + unitCounts + "·P=" + pointCounts
     result
 
+f_reference_trend_summary(ReferenceEngine engine, int layer) =>
+    layer == 0 ? f_trend_summary(engine.trendT0) : layer == 1 ? f_trend_summary(engine.trendT1) : f_trend_summary(engine.trendT2)
+
+f_reference_divergence_summary(ReferenceEngine engine, int layer) =>
+    layer == 0 ? f_divergence_summary(engine.divergencesT0) : layer == 1 ? f_divergence_summary(engine.divergencesT1) : f_divergence_summary(engine.divergencesT2)
+
+f_reference_point_summary(ReferenceEngine engine, int layer) =>
+    layer == 0 ? f_point_summary(engine.pointsT0) : layer == 1 ? f_point_summary(engine.pointsT1) : f_point_summary(engine.pointsT2)
+
 f_evidence_summary(array<Evidence> ledger) =>
     int confirmedCount = 0
     int candidateCount = 0
@@ -2306,9 +2349,9 @@ f_scenario_tooltip(array<Scenario> scenarios) =>
     result
 
 
-f_build_execution_state(array<Evidence> ledger, bool reliable, bool resourceClipped) =>
+f_build_execution_state(array<Evidence> ledger, bool reliable) =>
     ExecutionState result = ExecutionState.new(EXECUTION_DATA_INSUFFICIENT, 0, na, 0, na, na, na)
-    if reliable and not resourceClipped
+    if reliable
         result.status := EXECUTION_OBSERVE
         int primaryIndex = na
         int primaryPriority = -1
@@ -2362,7 +2405,7 @@ f_execution_risk_summary(ExecutionState state) =>
 f_execution_tooltip(ExecutionState state, array<Evidence> ledger) =>
     string result = "交易状态仅整合已计算结构；不构成仓位、收益或自动下单建议。"
     if state.status == EXECUTION_DATA_INSUFFICIENT
-        result := "标准图表、可靠起点和绘图资源必须同时满足，才评估交易状态。"
+        result := "标准图表和可靠起点必须同时满足，才评估交易状态；绘图裁剪不改变结构状态。"
     else if state.status == EXECUTION_OBSERVE
         result := "当前没有活动结构证据。"
     else if not na(state.primaryEvidenceIndex) and state.primaryEvidenceIndex >= 0 and state.primaryEvidenceIndex < array.size(ledger)
@@ -2451,7 +2494,7 @@ f_draw_points(array<BuySellPoint> points, array<line> lines, array<label> labels
             int i = pointCount - 1 - offset
             BuySellPoint current = array.get(points, i)
             bool activeVisible = not activeOnly or not current.confirmed or current.valid
-            bool labelVisible = drawPointLabels and (current.confirmed or showCandidates) and array.size(labels) < 480
+            bool labelVisible = drawPointLabels and current.structureIndex >= bar_index - detailBars and (current.confirmed or showCandidates) and array.size(labels) < 480
             bool rangeVisible = drawEvidenceRanges and current.confirmed and current.structureIndex >= bar_index - detailBars and array.size(lines) < 470
             if activeVisible and (labelVisible or rangeVisible)
                 color identityColor = current.direction == 1 ? upColor : downColor
@@ -2711,7 +2754,7 @@ if barstate.islast
     string resourceStatus = pointHistoryClipped ? "历史点预算裁剪" : nearObjectLimit ? "几何已主动裁剪" : "预算正常"
     f_panel_cell(statusPanel, 1, 41, "焦T0-3·参T0-2·" + resourceStatus)
     bool executionReliable = standardChart and warmedUp and not na(reliableStartTime)
-    ExecutionState executionState = f_build_execution_state(activeEvidence, executionReliable, resourceClipped)
+    ExecutionState executionState = f_build_execution_state(activeEvidence, executionReliable)
     bool crossTimeframeOpposition = false
     int resonanceCount = array.size(activeResonances)
     if executionState.direction != 0 and resonanceCount > 0
@@ -2721,14 +2764,41 @@ if barstate.islast
                 crossTimeframeOpposition := true
                 break
     string executionStateText = f_execution_status_summary(executionState) + (crossTimeframeOpposition ? " · 跨周期反向确认" : "")
+    int automaticOperationMarket = 0
     int automaticOperationLayer = 0
+    string automaticOperationTimeframe = timeframe.period
     if not na(executionState.primaryEvidenceIndex) and executionState.primaryEvidenceIndex < array.size(activeEvidence)
-        automaticOperationLayer := array.get(activeEvidence, executionState.primaryEvidenceIndex).layer
+        Evidence primary = array.get(activeEvidence, executionState.primaryEvidenceIndex)
+        automaticOperationMarket := primary.market
+        automaticOperationLayer := primary.layer
+        automaticOperationTimeframe := primary.marketTimeframe
+    int operationMarket = operationLevel == "自动" ? automaticOperationMarket : 0
     int operationLayer = operationLevel == "自动" ? automaticOperationLayer : operationLevel == "T0" ? 0 : operationLevel == "T1" ? 1 : operationLevel == "T2" ? 2 : 3
-    string operationLabel = operationLevel == "自动" ? "自动·T" + str.tostring(operationLayer) : operationLevel
-    string operationTrend = operationLayer == 0 ? f_trend_summary(trendT0) : operationLayer == 1 ? f_trend_summary(trendT1) : operationLayer == 2 ? f_trend_summary(trendT2) : f_trend_summary(trendT3)
-    string operationDivergence = operationLayer == 0 ? f_divergence_summary(divergencesT0) : operationLayer == 1 ? f_divergence_summary(divergencesT1) : operationLayer == 2 ? f_divergence_summary(divergencesT2) : f_divergence_summary(divergencesT3)
-    string operationPoints = operationLayer == 0 ? f_point_summary(pointsT0) : operationLayer == 1 ? f_point_summary(pointsT1) : operationLayer == 2 ? f_point_summary(pointsT2) : f_point_summary(pointsT3)
+    string operationTimeframe = operationLevel == "自动" ? automaticOperationTimeframe : timeframe.period
+    string operationLabel = (operationLevel == "自动" ? "自动·" : "") + operationTimeframe + "·T" + str.tostring(operationLayer)
+    string operationTrend = ""
+    string operationDivergence = ""
+    string operationPoints = ""
+    if operationMarket == 0
+        operationTrend := operationLayer == 0 ? f_trend_summary(trendT0) : operationLayer == 1 ? f_trend_summary(trendT1) : operationLayer == 2 ? f_trend_summary(trendT2) : f_trend_summary(trendT3)
+        operationDivergence := operationLayer == 0 ? f_divergence_summary(divergencesT0) : operationLayer == 1 ? f_divergence_summary(divergencesT1) : operationLayer == 2 ? f_divergence_summary(divergencesT2) : f_divergence_summary(divergencesT3)
+        operationPoints := operationLayer == 0 ? f_point_summary(pointsT0) : operationLayer == 1 ? f_point_summary(pointsT1) : operationLayer == 2 ? f_point_summary(pointsT2) : f_point_summary(pointsT3)
+    else if operationMarket == 1
+        operationTrend := f_reference_trend_summary(referenceEngine1, operationLayer)
+        operationDivergence := f_reference_divergence_summary(referenceEngine1, operationLayer)
+        operationPoints := f_reference_point_summary(referenceEngine1, operationLayer)
+    else if operationMarket == 2
+        operationTrend := f_reference_trend_summary(referenceEngine2, operationLayer)
+        operationDivergence := f_reference_divergence_summary(referenceEngine2, operationLayer)
+        operationPoints := f_reference_point_summary(referenceEngine2, operationLayer)
+    else if operationMarket == 3
+        operationTrend := f_reference_trend_summary(referenceEngine3, operationLayer)
+        operationDivergence := f_reference_divergence_summary(referenceEngine3, operationLayer)
+        operationPoints := f_reference_point_summary(referenceEngine3, operationLayer)
+    else
+        operationTrend := f_reference_trend_summary(referenceEngine4, operationLayer)
+        operationDivergence := f_reference_divergence_summary(referenceEngine4, operationLayer)
+        operationPoints := f_reference_point_summary(referenceEngine4, operationLayer)
 
     if not showStatusPanel
         table.clear(statusPanel, 0, 0, 1, 41)
