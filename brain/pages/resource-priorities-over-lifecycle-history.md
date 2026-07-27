@@ -5,7 +5,7 @@ category: decision
 status: active
 tags: [performance, rendering, lifecycle, free-plan]
 created: "2026-07-27T13:14:28"
-updated: "2026-07-27T17:24:01"
+updated: "2026-07-27T17:28:07"
 ---
 
 ## compiled_truth
@@ -81,3 +81,9 @@ TradingView 的编译 token、历史执行时间、实时 tick 时间、内存�
   summary: "记录候选精确区间边界与首批正确性性能修复已落地"
   source: "2026-07-27 chanlun.pine 实现与源码契约"
   affects: [resource-priorities-over-lifecycle-history]
+
+- time: 2026-07-27T17:28:07
+  kind: evidence
+  summary: "优化提交 958b1d1 已通过 TradingView 官方 Pine 编译"
+  source: "2026-07-27 用户实测"
+  affects: [current-pine-observable-baseline]
