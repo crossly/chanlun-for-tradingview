@@ -44,10 +44,38 @@ class CourseV2ContractTest(unittest.TestCase):
         )
 
     def test_segments_keep_full_child_range(self) -> None:
-        self.assertIn("f_children_range_high(lowerUnits, startChild, endpointChild - 1)", SOURCE)
-        self.assertIn("f_children_range_low(lowerUnits, startChild, endpointChild - 1)", SOURCE)
+        self.assertIn(
+            "[segmentHigh, segmentLow, segmentDifHigh, segmentDifLow] = "
+            "f_children_stats(lowerUnits, startChild, endpointChild - 1)",
+            SOURCE,
+        )
+        self.assertNotIn("f_children_range_high", SOURCE)
+        self.assertNotIn("f_children_range_low", SOURCE)
         self.assertIn("float rangeHigh", SOURCE)
         self.assertIn("float rangeLow", SOURCE)
+
+    def test_dif_extremes_are_scanned_once_then_composed(self) -> None:
+        self.assertIn("float difHigh", SOURCE)
+        self.assertIn("float difLow", SOURCE)
+        self.assertIn("f_dif_bounds", SOURCE)
+        self.assertIn("f_apply_raw_strength", SOURCE)
+        self.assertIn("f_extend_stroke_strength", SOURCE)
+        self.assertIn("f_apply_composite_strength", SOURCE)
+        self.assertNotIn("f_unit_dif_extreme", SOURCE)
+
+        composite_builder = re.search(
+            r"f_apply_composite_strength\(.*?\) =>(?P<body>.*?)"
+            r"\n\nf_update_strokes",
+            SOURCE,
+            flags=re.DOTALL,
+        )
+        self.assertIsNotNone(composite_builder)
+        self.assertNotIn("array<float> difValues", composite_builder.group("body"))
+        self.assertIn(
+            "candidateUnit := "
+            "f_apply_raw_strength(candidateUnit, posAreaCums, negAreaCums, difValues)",
+            SOURCE,
+        )
 
     def test_center_relation_and_expansion_use_course_v2_ranges(self) -> None:
         self.assertIn("current.dd > previous.gg ? 1 : current.gg < previous.dd ? -1 : 0", SOURCE)
@@ -180,8 +208,8 @@ class CourseV2ContractTest(unittest.TestCase):
 
 
     def test_departure_detection_is_direction_aware(self) -> None:
-        # ADR 0046: leaving units start inside the core, so whole-unit
-        # separation misidentifies the reverse retest as the departure.
+        # Leaving units start inside the core, so whole-unit separation
+        # misidentifies the reverse retest as the departure.
         self.assertIn("f_unit_cross_side", SOURCE)
         self.assertIn("f_retest_holds_outside", SOURCE)
         self.assertNotIn("f_unit_center_side", SOURCE)
@@ -205,10 +233,7 @@ class CourseV2ContractTest(unittest.TestCase):
             SOURCE,
         )
 
-    def test_candidate_extension_does_not_trigger_historical_replay(self) -> None:
-        # ADR 0047: moving the terminal candidate endpoint must not mark
-        # structures dirty; historical replay rebuilds only on new-stroke
-        # or confirmation boundaries to fit the free-plan time budget.
+    def test_candidate_extension_refreshes_reference_hierarchy(self) -> None:
         stroke_builder = re.search(
             r"f_update_strokes\(.*?\) =>(?P<body>.*?)\n\nf_extend_terminal_candidate",
             SOURCE,
@@ -216,14 +241,51 @@ class CourseV2ContractTest(unittest.TestCase):
         )
         self.assertIsNotNone(stroke_builder)
         body = stroke_builder.group("body")
-        self.assertEqual(body.count("changed := true"), 2)
+        self.assertEqual(body.count("changed := true"), 3)
         more_extreme_branch = re.search(
             r"if moreExtreme or equalAndLater(?P<branch>.*?)\n        else\n",
             body,
             flags=re.DOTALL,
         )
         self.assertIsNotNone(more_extreme_branch)
-        self.assertNotIn("changed := true", more_extreme_branch.group("branch"))
+        self.assertIn("changed := true", more_extreme_branch.group("branch"))
+        self.assertIn(
+            "state.structuresDirty := state.structuresDirty or structuresChanged",
+            SOURCE,
+        )
+
+    def test_reliable_start_uses_first_center_confirmation_time(self) -> None:
+        reliable_builder = re.search(
+            r"f_reliable_confirmed_center_time\(.*?\) =>(?P<body>.*?)"
+            r"\n\nf_center_relation",
+            SOURCE,
+            flags=re.DOTALL,
+        )
+        self.assertIsNotNone(reliable_builder)
+        self.assertIn(
+            "reliableTime := na(third.confirmationTime) ? "
+            "third.endTime : third.confirmationTime",
+            reliable_builder.group("body"),
+        )
+        self.assertIn(
+            "reliableStartTime := "
+            "f_reliable_confirmed_center_time(segmentsS, MACD_WARMUP_BARS)",
+            SOURCE,
+        )
+        self.assertNotIn("reliableStartTime := time", SOURCE)
+
+    def test_seed_direction_updates_incrementally_without_preview_copies(self) -> None:
+        seed_builder = re.search(
+            r"f_seed_direction_step\(.*?\) =>(?P<body>.*?)\n\nf_ingest_kbar",
+            SOURCE,
+            flags=re.DOTALL,
+        )
+        self.assertIsNotNone(seed_builder)
+        self.assertNotIn("for ", seed_builder.group("body"))
+        self.assertIn("float seedClusterHigh", SOURCE)
+        self.assertIn("float seedClusterLow", SOURCE)
+        self.assertNotIn("previewPendingHighs", SOURCE)
+        self.assertNotIn("previewPendingLows", SOURCE)
 
     def test_execution_policy_derives_state_without_changing_structure_truth(self) -> None:
         for constant in (

@@ -2,10 +2,10 @@
 id: course-v2-theory-authority
 title: "course-v2 是唯一生产理论口径"
 category: decision
-status: active
+status: archived
 tags: [theory, course-v2, compatibility]
 created: "2026-07-27T13:14:27"
-updated: "2026-07-27T13:14:27"
+updated: "2026-07-27T17:15:29"
 ---
 
 ## compiled_truth
@@ -29,4 +29,10 @@ updated: "2026-07-27T13:14:27"
   kind: decision
   summary: "从项目理论规范、ADR 与提交历史提炼持续约束"
   source: "README, CONTEXT.md, ADR, git log"
+  affects: [course-v2-theory-authority]
+
+- time: 2026-07-27T17:15:29
+  kind: reversal
+  summary: "不再把 course-v2 spec/ADR 作为优化算法权威；当前 chanlun.pine 的可观察行为成为回归基线"
+  source: brain archive-page
   affects: [course-v2-theory-authority]

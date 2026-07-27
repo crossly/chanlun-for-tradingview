@@ -106,6 +106,8 @@ type Unit
     int lastChild
     float macdArea
     float difExtreme
+    float difHigh
+    float difLow
     float rangeHigh
     float rangeLow
 
@@ -305,6 +307,8 @@ type Scenario
 type ReferenceState
     bool seedReady
     int seedDirection
+    float seedClusterHigh
+    float seedClusterLow
     int lastSourceTime
     int nextIndex
     int lastKnownTime
@@ -344,7 +348,7 @@ f_copy_kbar(KBar source) =>
 
 
 f_copy_unit(Unit source) =>
-    Unit.new(source.layer, source.direction, source.startIndex, source.endIndex, source.startTime, source.endTime, source.confirmationTime, source.startPrice, source.endPrice, source.confirmed, source.firstChild, source.lastChild, source.macdArea, source.difExtreme, source.rangeHigh, source.rangeLow)
+    Unit.new(source.layer, source.direction, source.startIndex, source.endIndex, source.startTime, source.endTime, source.confirmationTime, source.startPrice, source.endPrice, source.confirmed, source.firstChild, source.lastChild, source.macdArea, source.difExtreme, source.difHigh, source.difLow, source.rangeHigh, source.rangeLow)
 
 // 预览路径只会追加元素或修改各数组的最后一个对象，因此浅拷贝共享已确认
 // 对象，仅深拷贝可变尾部；这是隔离候选副本所需的最小拷贝量。
@@ -364,7 +368,7 @@ f_tail_isolated_units(array<Unit> source) =>
 
 
 f_new_reference_engine() =>
-    ReferenceEngine.new(ReferenceState.new(false, 0, na, 0, na, false), array.new<KBar>(), array.new<Fractal>(), array.new<Unit>(), array.new<Unit>(), array.new<Unit>(), array.new<Unit>(), array.new<Unit>(), array.new<float>(), array.new<float>(), array.new<int>(), array.new<int>(), array.new<float>(), array.new<float>(), array.new<float>(), array.new<Center>(), array.new<Center>(), array.new<Center>(), array.new<Divergence>(), array.new<Divergence>(), array.new<Divergence>(), array.new<BuySellPoint>(), array.new<BuySellPoint>(), array.new<BuySellPoint>(), na, na, na)
+    ReferenceEngine.new(ReferenceState.new(false, 0, na, na, na, 0, na, false), array.new<KBar>(), array.new<Fractal>(), array.new<Unit>(), array.new<Unit>(), array.new<Unit>(), array.new<Unit>(), array.new<Unit>(), array.new<float>(), array.new<float>(), array.new<int>(), array.new<int>(), array.new<float>(), array.new<float>(), array.new<float>(), array.new<Center>(), array.new<Center>(), array.new<Center>(), array.new<Divergence>(), array.new<Divergence>(), array.new<Divergence>(), array.new<BuySellPoint>(), array.new<BuySellPoint>(), array.new<BuySellPoint>(), na, na, na)
 
 f_next_reference_seconds(int seconds) =>
     seconds < 60 ? 60 : seconds < 300 ? 300 : seconds < 900 ? 900 : seconds < 3600 ? 3600 : seconds < 14400 ? 14400 : seconds < 86400 ? 86400 : seconds < 604800 ? 604800 : seconds < 2592000 ? 2592000 : seconds < 7776000 ? 7776000 : seconds < 31536000 ? 31536000 : 0
@@ -388,23 +392,19 @@ f_contains(float firstHigh, float firstLow, float secondHigh, float secondLow) =
 f_relation(float previousHigh, float previousLow, float currentHigh, float currentLow) =>
     currentHigh > previousHigh and currentLow > previousLow ? 1 : currentHigh < previousHigh and currentLow < previousLow ? -1 : 0
 
-f_seed_direction(array<float> pendingHighs, array<float> pendingLows) =>
-    int result = 0
-    int pendingSize = array.size(pendingHighs)
-    if pendingSize >= 2
-        float clusterHigh = array.get(pendingHighs, 0)
-        float clusterLow = array.get(pendingLows, 0)
-        for i = 1 to pendingSize - 1
-            float nextHigh = array.get(pendingHighs, i)
-            float nextLow = array.get(pendingLows, i)
-            if not f_contains(clusterHigh, clusterLow, nextHigh, nextLow)
-                result := f_relation(clusterHigh, clusterLow, nextHigh, nextLow)
-                if result != 0
-                    break
-            else
-                clusterHigh := math.max(clusterHigh, nextHigh)
-                clusterLow := math.min(clusterLow, nextLow)
-    result
+f_seed_direction_step(float clusterHigh, float clusterLow, float nextHigh, float nextLow) =>
+    int direction = 0
+    float updatedHigh = clusterHigh
+    float updatedLow = clusterLow
+    if na(clusterHigh) or na(clusterLow)
+        updatedHigh := nextHigh
+        updatedLow := nextLow
+    else if f_contains(clusterHigh, clusterLow, nextHigh, nextLow)
+        updatedHigh := math.max(clusterHigh, nextHigh)
+        updatedLow := math.min(clusterLow, nextLow)
+    else
+        direction := f_relation(clusterHigh, clusterLow, nextHigh, nextLow)
+    [direction, updatedHigh, updatedLow]
 
 f_ingest_kbar(array<KBar> bars, float rawHigh, float rawLow, int rawIndex, int rawTime, int forcedDirection) =>
     bool appended = false
@@ -484,20 +484,41 @@ f_unit_macd_area(array<float> posAreaCums, array<float> negAreaCums, int startIn
     int lastIndex = math.min(array.size(cums) - 1, math.max(startIndex, endIndex))
     lastIndex >= firstIndex ? array.get(cums, lastIndex) - (firstIndex > 0 ? array.get(cums, firstIndex - 1) : 0.0) : 0.0
 
-f_unit_dif_extreme(array<float> difValues, int startIndex, int endIndex, int direction) =>
-    float extreme = na
+f_dif_bounds(array<float> difValues, int startIndex, int endIndex) =>
+    float resultHigh = na
+    float resultLow = na
     int firstIndex = math.max(0, math.min(startIndex, endIndex))
     int lastIndex = math.min(array.size(difValues) - 1, math.max(startIndex, endIndex))
     if lastIndex >= firstIndex
         for i = firstIndex to lastIndex
             float value = array.get(difValues, i)
             if not na(value)
-                extreme := na(extreme) ? value : direction == 1 ? math.max(extreme, value) : math.min(extreme, value)
-    extreme
+                resultHigh := na(resultHigh) ? value : math.max(resultHigh, value)
+                resultLow := na(resultLow) ? value : math.min(resultLow, value)
+    [resultHigh, resultLow]
 
-f_apply_unit_strength(Unit unit, array<float> posAreaCums, array<float> negAreaCums, array<float> difValues) =>
+f_apply_raw_strength(Unit unit, array<float> posAreaCums, array<float> negAreaCums, array<float> difValues) =>
+    [difHigh, difLow] = f_dif_bounds(difValues, unit.startIndex, unit.endIndex)
     unit.macdArea := f_unit_macd_area(posAreaCums, negAreaCums, unit.startIndex, unit.endIndex, unit.direction)
-    unit.difExtreme := f_unit_dif_extreme(difValues, unit.startIndex, unit.endIndex, unit.direction)
+    unit.difHigh := difHigh
+    unit.difLow := difLow
+    unit.difExtreme := unit.direction == 1 ? difHigh : difLow
+    unit
+
+f_extend_stroke_strength(Unit unit, int previousEndIndex, array<float> posAreaCums, array<float> negAreaCums, array<float> difValues) =>
+    if unit.endIndex > previousEndIndex
+        [newDifHigh, newDifLow] = f_dif_bounds(difValues, previousEndIndex + 1, unit.endIndex)
+        unit.difHigh := na(unit.difHigh) ? newDifHigh : na(newDifHigh) ? unit.difHigh : math.max(unit.difHigh, newDifHigh)
+        unit.difLow := na(unit.difLow) ? newDifLow : na(newDifLow) ? unit.difLow : math.min(unit.difLow, newDifLow)
+    unit.macdArea := f_unit_macd_area(posAreaCums, negAreaCums, unit.startIndex, unit.endIndex, unit.direction)
+    unit.difExtreme := unit.direction == 1 ? unit.difHigh : unit.difLow
+    unit
+
+f_apply_composite_strength(Unit unit, array<float> posAreaCums, array<float> negAreaCums, float difHigh, float difLow) =>
+    unit.macdArea := f_unit_macd_area(posAreaCums, negAreaCums, unit.startIndex, unit.endIndex, unit.direction)
+    unit.difHigh := difHigh
+    unit.difLow := difLow
+    unit.difExtreme := unit.direction == 1 ? difHigh : difLow
     unit
 
 f_update_strokes(array<Fractal> endpoints, array<Unit> strokes, Fractal newFractal, array<float> posAreaCums, array<float> negAreaCums, array<float> difValues, bool allowConfirmation) =>
@@ -512,21 +533,19 @@ f_update_strokes(array<Fractal> endpoints, array<Unit> strokes, Fractal newFract
             bool moreExtreme = newFractal.kind == 1 ? newFractal.price > lastEndpoint.price : newFractal.price < lastEndpoint.price
             bool equalAndLater = newFractal.price == lastEndpoint.price and newFractal.structureTime >= lastEndpoint.structureTime
             if moreExtreme or equalAndLater
-                // 候选延伸只移动末端候选，不改变任何已确认前缀，因此不标记
-                // 结构变化：历史回放只在新笔或确认边界处重建，末端候选的
-                // 最终状态由下一个结构事件或活动 K 线全量重建覆盖。这是
-                // 免费计划 20 秒计算预算下保留确认真实性的裁剪 (ADR 0047)。
                 array.set(endpoints, endpointCount - 1, newFractal)
+                changed := true
                 int strokeCount = array.size(strokes)
                 if strokeCount > 0
                     Unit lastStroke = array.get(strokes, strokeCount - 1)
                     if not lastStroke.confirmed
+                        int previousEndIndex = lastStroke.endIndex
                         lastStroke.endIndex := newFractal.structureIndex
                         lastStroke.endTime := newFractal.structureTime
                         lastStroke.endPrice := newFractal.price
                         lastStroke.rangeHigh := math.max(lastStroke.startPrice, lastStroke.endPrice)
                         lastStroke.rangeLow := math.min(lastStroke.startPrice, lastStroke.endPrice)
-                        lastStroke := f_apply_unit_strength(lastStroke, posAreaCums, negAreaCums, difValues)
+                        lastStroke := f_extend_stroke_strength(lastStroke, previousEndIndex, posAreaCums, negAreaCums, difValues)
                         array.set(strokes, strokeCount - 1, lastStroke)
         else
             bool enoughSyntheticBars = math.abs(newFractal.kPosition - lastEndpoint.kPosition) >= 3
@@ -539,8 +558,8 @@ f_update_strokes(array<Fractal> endpoints, array<Unit> strokes, Fractal newFract
                     previousStroke.confirmationTime := newFractal.confirmationTime
                     array.set(strokes, strokeCount - 1, previousStroke)
                 int direction = lastEndpoint.kind == -1 ? 1 : -1
-                Unit nextStroke = Unit.new(0, direction, lastEndpoint.structureIndex, newFractal.structureIndex, lastEndpoint.structureTime, newFractal.structureTime, na, lastEndpoint.price, newFractal.price, false, lastEndpoint.kPosition, newFractal.kPosition, na, na, math.max(lastEndpoint.price, newFractal.price), math.min(lastEndpoint.price, newFractal.price))
-                nextStroke := f_apply_unit_strength(nextStroke, posAreaCums, negAreaCums, difValues)
+                Unit nextStroke = Unit.new(0, direction, lastEndpoint.structureIndex, newFractal.structureIndex, lastEndpoint.structureTime, newFractal.structureTime, na, lastEndpoint.price, newFractal.price, false, lastEndpoint.kPosition, newFractal.kPosition, na, na, na, na, math.max(lastEndpoint.price, newFractal.price), math.min(lastEndpoint.price, newFractal.price))
+                nextStroke := f_apply_raw_strength(nextStroke, posAreaCums, negAreaCums, difValues)
                 array.push(strokes, nextStroke)
                 array.push(endpoints, newFractal)
                 changed := true
@@ -553,12 +572,13 @@ f_extend_terminal_candidate(array<Unit> strokes, int sourceIndex, int sourceTime
         if not terminal.confirmed
             bool extends = terminal.direction == 1 ? sourceHigh >= terminal.endPrice : sourceLow <= terminal.endPrice
             if extends
+                int previousEndIndex = terminal.endIndex
                 terminal.endIndex := sourceIndex
                 terminal.endTime := sourceTime
                 terminal.endPrice := terminal.direction == 1 ? sourceHigh : sourceLow
                 terminal.rangeHigh := math.max(terminal.startPrice, terminal.endPrice)
                 terminal.rangeLow := math.min(terminal.startPrice, terminal.endPrice)
-                terminal := f_apply_unit_strength(terminal, posAreaCums, negAreaCums, difValues)
+                terminal := f_extend_stroke_strength(terminal, previousEndIndex, posAreaCums, negAreaCums, difValues)
                 array.set(strokes, strokeCount - 1, terminal)
 
 f_unit_high(Unit unit) =>
@@ -567,21 +587,23 @@ f_unit_high(Unit unit) =>
 f_unit_low(Unit unit) =>
     na(unit.rangeLow) ? math.min(unit.startPrice, unit.endPrice) : unit.rangeLow
 
-f_children_range_high(array<Unit> units, int firstChild, int lastChild) =>
-    float result = na
+f_children_stats(array<Unit> units, int firstChild, int lastChild) =>
+    float rangeHigh = na
+    float rangeLow = na
+    float difHigh = na
+    float difLow = na
     if firstChild >= 0 and lastChild >= firstChild and lastChild < array.size(units)
         for childIndex = firstChild to lastChild
-            float childHigh = f_unit_high(array.get(units, childIndex))
-            result := na(result) ? childHigh : math.max(result, childHigh)
-    result
-
-f_children_range_low(array<Unit> units, int firstChild, int lastChild) =>
-    float result = na
-    if firstChild >= 0 and lastChild >= firstChild and lastChild < array.size(units)
-        for childIndex = firstChild to lastChild
-            float childLow = f_unit_low(array.get(units, childIndex))
-            result := na(result) ? childLow : math.min(result, childLow)
-    result
+            Unit child = array.get(units, childIndex)
+            float childHigh = f_unit_high(child)
+            float childLow = f_unit_low(child)
+            rangeHigh := na(rangeHigh) ? childHigh : math.max(rangeHigh, childHigh)
+            rangeLow := na(rangeLow) ? childLow : math.min(rangeLow, childLow)
+            if not na(child.difHigh)
+                difHigh := na(difHigh) ? child.difHigh : math.max(difHigh, child.difHigh)
+            if not na(child.difLow)
+                difLow := na(difLow) ? child.difLow : math.min(difLow, child.difLow)
+    [rangeHigh, rangeLow, difHigh, difLow]
 
 f_feature_from_unit(Unit unit, int childIndex, int direction) =>
     bool highAtStart = unit.startPrice >= unit.endPrice
@@ -697,10 +719,9 @@ f_build_recursive_layer(array<Unit> lowerUnits, array<Unit> outputUnits, int lay
             Unit boundary = array.get(lowerUnits, endpointChild)
             Unit proof = array.get(lowerUnits, proofChild)
             int confirmationTime = na(proof.confirmationTime) ? proof.endTime : proof.confirmationTime
-            float segmentHigh = f_children_range_high(lowerUnits, startChild, endpointChild - 1)
-            float segmentLow = f_children_range_low(lowerUnits, startChild, endpointChild - 1)
-            Unit confirmedUnit = Unit.new(layer, segmentDirection, startUnit.startIndex, boundary.startIndex, startUnit.startTime, boundary.startTime, confirmationTime, startUnit.startPrice, boundary.startPrice, true, startChild, endpointChild - 1, na, na, segmentHigh, segmentLow)
-            confirmedUnit := f_apply_unit_strength(confirmedUnit, posAreaCums, negAreaCums, difValues)
+            [segmentHigh, segmentLow, segmentDifHigh, segmentDifLow] = f_children_stats(lowerUnits, startChild, endpointChild - 1)
+            Unit confirmedUnit = Unit.new(layer, segmentDirection, startUnit.startIndex, boundary.startIndex, startUnit.startTime, boundary.startTime, confirmationTime, startUnit.startPrice, boundary.startPrice, true, startChild, endpointChild - 1, na, na, na, na, segmentHigh, segmentLow)
+            confirmedUnit := f_apply_composite_strength(confirmedUnit, posAreaCums, negAreaCums, segmentDifHigh, segmentDifLow)
             array.push(outputUnits, confirmedUnit)
             startChild := endpointChild
         else
@@ -713,10 +734,14 @@ f_build_recursive_layer(array<Unit> lowerUnits, array<Unit> outputUnits, int lay
         float extremePrice = candidateStart.startPrice
         int extremeIndex = candidateStart.startIndex
         int extremeTime = candidateStart.startTime
+        float candidateHigh = na
+        float candidateLow = na
         for i = startChild to lowerCount - 1
             Unit child = array.get(lowerUnits, i)
             float childHigh = f_unit_high(child)
             float childLow = f_unit_low(child)
+            candidateHigh := na(candidateHigh) ? childHigh : math.max(candidateHigh, childHigh)
+            candidateLow := na(candidateLow) ? childLow : math.min(candidateLow, childLow)
             if candidateDirection == 1 and childHigh >= extremePrice
                 extremePrice := childHigh
                 bool highAtStart = child.startPrice >= child.endPrice
@@ -727,10 +752,10 @@ f_build_recursive_layer(array<Unit> lowerUnits, array<Unit> outputUnits, int lay
                 bool lowAtStart = child.startPrice <= child.endPrice
                 extremeIndex := lowAtStart ? child.startIndex : child.endIndex
                 extremeTime := lowAtStart ? child.startTime : child.endTime
-        float candidateHigh = f_children_range_high(lowerUnits, startChild, lowerCount - 1)
-        float candidateLow = f_children_range_low(lowerUnits, startChild, lowerCount - 1)
-        Unit candidateUnit = Unit.new(layer, candidateDirection, candidateStart.startIndex, extremeIndex, candidateStart.startTime, extremeTime, na, candidateStart.startPrice, extremePrice, false, startChild, lowerCount - 1, na, na, candidateHigh, candidateLow)
-        candidateUnit := f_apply_unit_strength(candidateUnit, posAreaCums, negAreaCums, difValues)
+        Unit candidateUnit = Unit.new(layer, candidateDirection, candidateStart.startIndex, extremeIndex, candidateStart.startTime, extremeTime, na, candidateStart.startPrice, extremePrice, false, startChild, lowerCount - 1, na, na, na, na, candidateHigh, candidateLow)
+        // 候选的价格极值可能早于最后子结构，必须按真实 start/end 区间取
+        // DIF；已确认复合结构才可安全地从完整子结构聚合。
+        candidateUnit := f_apply_raw_strength(candidateUnit, posAreaCums, negAreaCums, difValues)
         array.push(outputUnits, candidateUnit)
 
 f_unit_overlaps_center(Unit unit, float zd, float zg) =>
@@ -746,8 +771,8 @@ f_unit_cross_side(Unit unit, float zd, float zg) =>
 f_retest_holds_outside(Unit retest, int leaveDirection, float zd, float zg) =>
     leaveDirection == 1 ? f_unit_low(retest) >= zg : f_unit_high(retest) <= zd
 
-f_has_reliable_confirmed_center(array<Unit> units, int warmupBars) =>
-    bool found = false
+f_reliable_confirmed_center_time(array<Unit> units, int warmupBars) =>
+    int reliableTime = na
     int unitCount = array.size(units)
     if unitCount >= 3
         for startChild = 0 to unitCount - 3
@@ -760,9 +785,9 @@ f_has_reliable_confirmed_center(array<Unit> units, int warmupBars) =>
             float zd = math.max(f_unit_low(first), math.max(f_unit_low(second), f_unit_low(third)))
             float zg = math.min(f_unit_high(first), math.min(f_unit_high(second), f_unit_high(third)))
             if sourcesAfterWarmup and sourcesConfirmed and alternating and zd < zg
-                found := true
+                reliableTime := na(third.confirmationTime) ? third.endTime : third.confirmationTime
                 break
-    found
+    reliableTime
 
 f_center_relation(Center previous, Center current) =>
     current.dd > previous.gg ? 1 : current.gg < previous.dd ? -1 : 0
@@ -1049,7 +1074,7 @@ f_build_divergences(array<Unit> units, array<Center> centers, array<Divergence> 
                                 current.invalidationCandidate := true
                 array.set(divergences, divergenceIndex, current)
 
-f_build_completed_movements(array<Unit> components, array<Center> centers, array<Divergence> divergences, array<Unit> movements, int trendLevel, array<float> posAreaCums, array<float> negAreaCums, array<float> difValues) =>
+f_build_completed_movements(array<Unit> components, array<Center> centers, array<Divergence> divergences, array<Unit> movements, int trendLevel, array<float> posAreaCums, array<float> negAreaCums) =>
     array.clear(movements)
     int nextFirstComponent = 0
     int previousDirection = 0
@@ -1077,11 +1102,10 @@ f_build_completed_movements(array<Unit> components, array<Center> centers, array
                     Unit first = array.get(components, firstComponent)
                     Unit last = array.get(components, lastComponent)
                     Unit proof = array.get(components, proofComponent)
-                    float movementHigh = f_children_range_high(components, firstComponent, lastComponent)
-                    float movementLow = f_children_range_low(components, firstComponent, lastComponent)
+                    [movementHigh, movementLow, movementDifHigh, movementDifLow] = f_children_stats(components, firstComponent, lastComponent)
                     int completionTime = na(proof.confirmationTime) ? proof.endTime : proof.confirmationTime
-                    Unit movement = Unit.new(trendLevel, divergence.direction, first.startIndex, last.endIndex, first.startTime, last.endTime, completionTime, first.startPrice, last.endPrice, true, firstComponent, lastComponent, na, na, movementHigh, movementLow)
-                    movement := f_apply_unit_strength(movement, posAreaCums, negAreaCums, difValues)
+                    Unit movement = Unit.new(trendLevel, divergence.direction, first.startIndex, last.endIndex, first.startTime, last.endTime, completionTime, first.startPrice, last.endPrice, true, firstComponent, lastComponent, na, na, na, na, movementHigh, movementLow)
+                    movement := f_apply_composite_strength(movement, posAreaCums, negAreaCums, movementDifHigh, movementDifLow)
                     array.push(movements, movement)
                     nextFirstComponent := proofComponent
                     previousDirection := divergence.direction
@@ -1685,11 +1709,14 @@ f_process_reference_bar(bool enabled, int sourceTime, float sourceHigh, float so
         array.push(difValues, sourceDif)
         bool appendedSynthetic = false
         if not state.seedReady
+            [nextSeedDirection, nextClusterHigh, nextClusterLow] = f_seed_direction_step(state.seedClusterHigh, state.seedClusterLow, sourceHigh, sourceLow)
+            state.seedDirection := nextSeedDirection
+            state.seedClusterHigh := nextClusterHigh
+            state.seedClusterLow := nextClusterLow
             array.push(pendingHighs, sourceHigh)
             array.push(pendingLows, sourceLow)
             array.push(pendingIndices, sourceIndex)
             array.push(pendingTimes, sourceTime)
-            state.seedDirection := f_seed_direction(pendingHighs, pendingLows)
             if state.seedDirection != 0
                 state.seedReady := true
                 int pendingCount = array.size(pendingHighs)
@@ -1700,6 +1727,8 @@ f_process_reference_bar(bool enabled, int sourceTime, float sourceHigh, float so
                 array.clear(pendingLows)
                 array.clear(pendingIndices)
                 array.clear(pendingTimes)
+                state.seedClusterHigh := na
+                state.seedClusterLow := na
         else
             appendedSynthetic := f_ingest_kbar(bars, sourceHigh, sourceLow, sourceIndex, sourceTime, state.seedDirection)
 
@@ -1721,15 +1750,15 @@ f_build_reference_engine(ReferenceEngine engine) =>
     f_build_recursive_layer(engine.strokes, engine.segmentsS, -1, engine.posAreaCums, engine.negAreaCums, engine.difValues)
     f_build_centers(engine.segmentsS, engine.centersT0, 0)
     f_build_divergences(engine.segmentsS, engine.centersT0, engine.divergencesT0, 0, MACD_WARMUP_BARS)
-    f_build_completed_movements(engine.segmentsS, engine.centersT0, engine.divergencesT0, engine.movementsT0, 0, engine.posAreaCums, engine.negAreaCums, engine.difValues)
+    f_build_completed_movements(engine.segmentsS, engine.centersT0, engine.divergencesT0, engine.movementsT0, 0, engine.posAreaCums, engine.negAreaCums)
 
     f_build_centers(engine.movementsT0, engine.centersT1, 1)
     f_build_divergences(engine.movementsT0, engine.centersT1, engine.divergencesT1, 1, MACD_WARMUP_BARS)
-    f_build_completed_movements(engine.movementsT0, engine.centersT1, engine.divergencesT1, engine.movementsT1, 1, engine.posAreaCums, engine.negAreaCums, engine.difValues)
+    f_build_completed_movements(engine.movementsT0, engine.centersT1, engine.divergencesT1, engine.movementsT1, 1, engine.posAreaCums, engine.negAreaCums)
 
     f_build_centers(engine.movementsT1, engine.centersT2, 2)
     f_build_divergences(engine.movementsT1, engine.centersT2, engine.divergencesT2, 2, MACD_WARMUP_BARS)
-    f_build_completed_movements(engine.movementsT1, engine.centersT2, engine.divergencesT2, engine.movementsT2, 2, engine.posAreaCums, engine.negAreaCums, engine.difValues)
+    f_build_completed_movements(engine.movementsT1, engine.centersT2, engine.divergencesT2, engine.movementsT2, 2, engine.posAreaCums, engine.negAreaCums)
     f_link_center_promotions(engine.centersT0, engine.centersT1, engine.movementsT0)
     f_link_center_promotions(engine.centersT1, engine.centersT2, engine.movementsT1)
     f_build_points(engine.segmentsS, engine.centersT0, engine.divergencesT0, engine.movementsT0, noLowerPoints, engine.pointsT0, 0)
@@ -1746,19 +1775,19 @@ f_build_focus_hierarchy(array<Unit> sourceStrokes, array<float> posAreaCums, arr
     f_build_recursive_layer(sourceStrokes, segments, -1, posAreaCums, negAreaCums, difValues)
     f_build_centers(segments, centers0, 0)
     f_build_divergences(segments, centers0, divergences0, 0, MACD_WARMUP_BARS)
-    f_build_completed_movements(segments, centers0, divergences0, movements0, 0, posAreaCums, negAreaCums, difValues)
+    f_build_completed_movements(segments, centers0, divergences0, movements0, 0, posAreaCums, negAreaCums)
 
     f_build_centers(movements0, centers1, 1)
     f_build_divergences(movements0, centers1, divergences1, 1, MACD_WARMUP_BARS)
-    f_build_completed_movements(movements0, centers1, divergences1, movements1, 1, posAreaCums, negAreaCums, difValues)
+    f_build_completed_movements(movements0, centers1, divergences1, movements1, 1, posAreaCums, negAreaCums)
 
     f_build_centers(movements1, centers2, 2)
     f_build_divergences(movements1, centers2, divergences2, 2, MACD_WARMUP_BARS)
-    f_build_completed_movements(movements1, centers2, divergences2, movements2, 2, posAreaCums, negAreaCums, difValues)
+    f_build_completed_movements(movements1, centers2, divergences2, movements2, 2, posAreaCums, negAreaCums)
 
     f_build_centers(movements2, centers3, 3)
     f_build_divergences(movements2, centers3, divergences3, 3, MACD_WARMUP_BARS)
-    f_build_completed_movements(movements2, centers3, divergences3, movements3, 3, posAreaCums, negAreaCums, difValues)
+    f_build_completed_movements(movements2, centers3, divergences3, movements3, 3, posAreaCums, negAreaCums)
 
     f_link_center_promotions(centers0, centers1, movements0)
     f_link_center_promotions(centers1, centers2, movements1)
@@ -1911,6 +1940,8 @@ var array<float> negAreaCums = array.new<float>()
 var array<float> difValues = array.new<float>()
 var bool seedReady = false
 var int seedDirection = 0
+var float seedClusterHigh = na
+var float seedClusterLow = na
 var int lastProcessedRawIndex = na
 var int dataStartTime = na
 var int reliableStartTime = na
@@ -1929,11 +1960,14 @@ if confirmedRawBar and (na(lastProcessedRawIndex) or bar_index != lastProcessedR
     f_push_macd_cums(posAreaCums, negAreaCums, macdHistValue)
     bool appendedSynthetic = false
     if not seedReady
+        [nextSeedDirection, nextClusterHigh, nextClusterLow] = f_seed_direction_step(seedClusterHigh, seedClusterLow, normalizedHigh, normalizedLow)
+        seedDirection := nextSeedDirection
+        seedClusterHigh := nextClusterHigh
+        seedClusterLow := nextClusterLow
         array.push(pendingHighs, normalizedHigh)
         array.push(pendingLows, normalizedLow)
         array.push(pendingIndices, bar_index)
         array.push(pendingTimes, time)
-        seedDirection := f_seed_direction(pendingHighs, pendingLows)
         if seedDirection != 0
             seedReady := true
             int pendingCount = array.size(pendingHighs)
@@ -1944,6 +1978,8 @@ if confirmedRawBar and (na(lastProcessedRawIndex) or bar_index != lastProcessedR
             array.clear(pendingLows)
             array.clear(pendingIndices)
             array.clear(pendingTimes)
+            seedClusterHigh := na
+            seedClusterLow := na
     else
         appendedSynthetic := f_ingest_kbar(syntheticBars, normalizedHigh, normalizedLow, bar_index, time, seedDirection)
 
@@ -1977,20 +2013,14 @@ if barstate.islast
         if seedReady
             previewAppendedSynthetic := f_ingest_kbar(viewSyntheticBars, normalizedHigh, normalizedLow, bar_index, time, seedDirection)
         else
-            array<float> previewPendingHighs = array.copy(pendingHighs)
-            array<float> previewPendingLows = array.copy(pendingLows)
-            array<int> previewPendingIndices = array.copy(pendingIndices)
-            array<int> previewPendingTimes = array.copy(pendingTimes)
-            array.push(previewPendingHighs, normalizedHigh)
-            array.push(previewPendingLows, normalizedLow)
-            array.push(previewPendingIndices, bar_index)
-            array.push(previewPendingTimes, time)
-            int previewSeedDirection = f_seed_direction(previewPendingHighs, previewPendingLows)
+            [previewSeedDirection, previewClusterHigh, previewClusterLow] = f_seed_direction_step(seedClusterHigh, seedClusterLow, normalizedHigh, normalizedLow)
             if previewSeedDirection != 0
-                int previewPendingCount = array.size(previewPendingHighs)
+                int previewPendingCount = array.size(pendingHighs)
                 for i = 0 to previewPendingCount - 1
-                    bool replayAppended = f_ingest_kbar(viewSyntheticBars, array.get(previewPendingHighs, i), array.get(previewPendingLows, i), array.get(previewPendingIndices, i), array.get(previewPendingTimes, i), previewSeedDirection)
+                    bool replayAppended = f_ingest_kbar(viewSyntheticBars, array.get(pendingHighs, i), array.get(pendingLows, i), array.get(pendingIndices, i), array.get(pendingTimes, i), previewSeedDirection)
                     previewAppendedSynthetic := previewAppendedSynthetic or replayAppended
+                bool currentAppended = f_ingest_kbar(viewSyntheticBars, normalizedHigh, normalizedLow, bar_index, time, previewSeedDirection)
+                previewAppendedSynthetic := previewAppendedSynthetic or currentAppended
         if previewAppendedSynthetic
             Fractal previewFractal = f_detect_confirmed_fractal(viewSyntheticBars, na)
             if not na(previewFractal)
@@ -2002,8 +2032,8 @@ if barstate.islast
     trendT1 := currentTrendT1
     trendT2 := currentTrendT2
     trendT3 := currentTrendT3
-    if na(reliableStartTime) and bar_index >= MACD_WARMUP_BARS and f_has_reliable_confirmed_center(segmentsS, MACD_WARMUP_BARS)
-        reliableStartTime := time
+    if na(reliableStartTime) and bar_index >= MACD_WARMUP_BARS
+        reliableStartTime := f_reliable_confirmed_center_time(segmentsS, MACD_WARMUP_BARS)
     array.clear(activeEvidence)
     f_collect_layer_evidence(activeEvidence, 0, timeframe.period, segmentsS, divergencesT0, pointsT0)
     f_collect_layer_evidence(activeEvidence, 0, timeframe.period, movementsT0, divergencesT1, pointsT1)
