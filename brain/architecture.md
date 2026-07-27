@@ -2,36 +2,40 @@
 slug: architecture
 title: System architecture
 role: system architecture
-updated: "2026-07-27T13:13:59"
+updated: "2026-07-27T16:48:31"
 ---
 
 # System architecture
 
 ## 概览
 
-项目是面向 TradingView 免费版的单文件 Pine v6 指标。计算、展示和提醒同处 `chanlun.pine`，但以明确的阶段与数据边界隔离：行情标准化与 K 线处理、递归结构引擎、结构事件/提醒、以及最后一根 K 线上的绘制与面板。
-
-`CONTEXT.md` 是结构术语的唯一词汇表；`docs/adr/` 固化理论、时间语义、递归边界和资源优先级。Python 合约测试只检查源码中可审计的约束；TradingView Pine v6 编译和图表运行才是最终兼容判据。
-
-## 模块图
+项目的唯一运行交付物是 `chanlun.pine`。它在同一个 Pine v6 overlay 指标内依次完成标准 OHLC 归一、方向相关包含、基础分型与课件新笔、特征序列线段、`T0-T3` 走势递归、证据组合、绘制和动态 `alert()`。
 
 ```mermaid
 graph TD
-  TV[TradingView 标准 OHLC 图表] --> P[chanlun.pine]
-  P --> K[方向相关包含与合成 K 线]
+  TV[TradingView 标准 OHLC] --> K[包含处理与合成 K 线]
   K --> F[基础分型与课件新笔]
-  F --> S[特征序列线段]
-  S --> R[T0-T3 递归中枢、走势、背驰、买卖点]
-  R --> E[证据、共振、区间套与情景]
-  E --> A[单一动态 alert JSON]
-  R --> V[几何绘制、标签、状态面板]
-  D[CONTEXT.md + docs/adr] -.理论与边界.-> P
-  T[tests/test_course_v2_contract.py] -.源码契约.-> P
+  F --> S[特征序列线段 S]
+  S --> T[焦点周期 T0-T3]
+  R[最多四个已收盘参考周期] --> RT[各自 T0-T2]
+  T --> E[背驰 买卖点 证据]
+  RT --> E
+  E --> C[共振 区间套 情景]
+  C --> A[单一动态 alert JSON]
+  T --> V[最近窗口几何与状态面板]
+  D[CONTEXT.md 与 ADR] -.理论和边界.-> K
+  Q[Python 源码契约] -.静态检查.-> T
 ```
 
-## 约束
+## 状态边界
 
-- 焦点周期绑定当前图表并完整递归到 `T3`；最多四个严格更高的参考周期只递归到 `T2`。
-- 确认只使用各自周期已收盘数据；活动 K 线仅形成隔离候选，不能改写确认结构。
-- 全历史计算与最近详细几何绘制窗口分离，以满足每类最多 500 个绘图对象及免费计划预算。
-- 指标不实现策略下单、仓位、收益或回测。
+- 焦点周期确认状态由已收盘图表 K 线增量摄入；活动 K 线在隔离的尾部副本上生成候选视图。
+- 参考周期通过 `request.security(..., lookahead_on)` 配合表达式内 `[1]` 只读取已收盘来源柱；每个参考引擎独立维护结构。
+- 当前工作树不保存完整历史 lifecycle ledger。活动结构数组可重建，提醒只用有界去重键保留最近事件身份。
+- 全历史结构计算与 `detailBars` 最近窗口绘图分离；Python 测试只验证源码契约，官方 Pine v6 编译与图表运行才是兼容判据。
+
+## 已知审查边界
+
+- 焦点周期在最后一根实时 K 的每个 tick 复制历史数组并全量重建 `S/T0-T3`。
+- 展示层在每个最后柱更新删除并重建可见 line、label、box。
+- 参考周期同型更极端端点更新不设置 `structuresDirty`；确认前缀不受影响，但参考候选层级可能延迟刷新到下一次新笔边界。

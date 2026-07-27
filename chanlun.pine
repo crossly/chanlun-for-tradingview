@@ -65,11 +65,6 @@ bool alertResonance = input.bool(true, "共振", group = GROUP_ALERT)
 bool alertNesting = input.bool(true, "区间套", group = GROUP_ALERT)
 bool alertScenario = input.bool(false, "情景事件", group = GROUP_ALERT)
 bool alertCandidates = input.bool(false, "候选事件", group = GROUP_ALERT)
-// 历史生命周期账本在每个历史结构边界全量重建递归并收集带长字符串 ID 的
-// 结构快照，事件数组只增不减；免费计划的 20 秒 / 内存预算无法同时承担
-// 该账本与四参考周期，默认关闭 (ADR 0048)。关闭时确认结构、买卖点、
-// 证据、共振与提醒完全不受影响，只是不保留逐事件历史迁移记录。
-bool enableLifecycleHistory = input.bool(false, "历史生命周期账本（重负载）", group = GROUP_ALERT)
 
 // -----------------------------------------------------------------------------
 // Core structure types
@@ -306,26 +301,6 @@ type Scenario
     string invalidationText
     string eventId
 
-type StructureSnapshot
-    string marketTimeframe
-    string slotId
-    string structureKind
-    int layer
-    string structureId
-    string state
-    int structureTime
-    int knownTime
-    string sourceId
-    string reason
-
-type LifecycleEvent
-    string structureId
-    string state
-    int structureTime
-    int knownTime
-    string sourceId
-    string reason
-    string eventId
 
 type ReferenceState
     bool seedReady
@@ -367,8 +342,6 @@ type ReferenceEngine
 f_copy_kbar(KBar source) =>
     KBar.new(source.startIndex, source.endIndex, source.startTime, source.endTime, source.high, source.low, source.highIndex, source.lowIndex, source.highTime, source.lowTime, source.direction)
 
-f_copy_fractal(Fractal source) =>
-    Fractal.new(source.kind, source.kPosition, source.structureIndex, source.structureTime, source.confirmationTime, source.price)
 
 f_copy_unit(Unit source) =>
     Unit.new(source.layer, source.direction, source.startIndex, source.endIndex, source.startTime, source.endTime, source.confirmationTime, source.startPrice, source.endPrice, source.confirmed, source.firstChild, source.lastChild, source.macdArea, source.difExtreme, source.rangeHigh, source.rangeLow)
@@ -389,29 +362,6 @@ f_tail_isolated_units(array<Unit> source) =>
         array.set(result, count - 1, f_copy_unit(array.get(result, count - 1)))
     result
 
-f_copy_kbars(array<KBar> source) =>
-    array<KBar> result = array.new<KBar>()
-    int count = array.size(source)
-    if count > 0
-        for i = 0 to count - 1
-            array.push(result, f_copy_kbar(array.get(source, i)))
-    result
-
-f_copy_fractals(array<Fractal> source) =>
-    array<Fractal> result = array.new<Fractal>()
-    int count = array.size(source)
-    if count > 0
-        for i = 0 to count - 1
-            array.push(result, f_copy_fractal(array.get(source, i)))
-    result
-
-f_copy_units(array<Unit> source) =>
-    array<Unit> result = array.new<Unit>()
-    int count = array.size(source)
-    if count > 0
-        for i = 0 to count - 1
-            array.push(result, f_copy_unit(array.get(source, i)))
-    result
 
 f_new_reference_engine() =>
     ReferenceEngine.new(ReferenceState.new(false, 0, na, 0, na, false), array.new<KBar>(), array.new<Fractal>(), array.new<Unit>(), array.new<Unit>(), array.new<Unit>(), array.new<Unit>(), array.new<Unit>(), array.new<float>(), array.new<float>(), array.new<int>(), array.new<int>(), array.new<float>(), array.new<float>(), array.new<float>(), array.new<Center>(), array.new<Center>(), array.new<Center>(), array.new<Divergence>(), array.new<Divergence>(), array.new<Divergence>(), array.new<BuySellPoint>(), array.new<BuySellPoint>(), array.new<BuySellPoint>(), na, na, na)
@@ -1387,248 +1337,7 @@ f_evidence_short(Evidence evidence) =>
     string kindText = evidence.kind == 1 ? "盘背" : evidence.kind == 2 ? "趋背" : evidence.kind == 11 ? "1点" : evidence.kind == 12 ? "2点" : "3点"
     evidence.marketTimeframe + "·T" + str.tostring(evidence.layer) + "·" + kindText
 
-f_structure_level_id(string structureKind, int layer) =>
-    structureKind == "fractal" ? "F" : structureKind == "stroke" ? "B" : structureKind == "segment" ? "S" : "T" + str.tostring(layer)
 
-f_snapshot_id(string marketTimeframe, string structureKind, int layer, int direction, int structureTime, int endTime) =>
-    f_event_prefix(marketTimeframe) + "|" + f_structure_level_id(structureKind, layer) + "|" + structureKind + "|" + str.tostring(direction) + "|" + str.tostring(structureTime) + "|" + str.tostring(endTime)
-
-f_fractal_structure_id(string marketTimeframe, Fractal fractal) =>
-    f_snapshot_id(marketTimeframe, "fractal", -2, fractal.kind, fractal.structureTime, fractal.structureTime)
-
-f_unit_structure_id(string marketTimeframe, string structureKind, int layer, Unit unit) =>
-    f_snapshot_id(marketTimeframe, structureKind, layer, unit.direction, unit.startTime, unit.endTime)
-
-f_center_structure_id(string marketTimeframe, Center center, array<Unit> sourceUnits, int layer) =>
-    int sourceStartTime = center.startTime
-    int sourceEndTime = center.confirmationTime
-    bool hasStableSources = center.startChild >= 0 and center.startChild + 2 < array.size(sourceUnits)
-    if hasStableSources
-        sourceStartTime := array.get(sourceUnits, center.startChild).startTime
-        sourceEndTime := array.get(sourceUnits, center.startChild + 2).endTime
-    f_snapshot_id(marketTimeframe, "center", layer, 0, sourceStartTime, sourceEndTime)
-
-f_divergence_structure_id(string marketTimeframe, Divergence divergence) =>
-    string kind = divergence.kind == 2 ? "trend_divergence" : "consolidation_divergence"
-    f_snapshot_id(marketTimeframe, kind, divergence.layer, divergence.direction, divergence.parentStartTime, divergence.structureTime)
-
-f_point_structure_id(string marketTimeframe, BuySellPoint point) =>
-    string kind = "point_" + str.tostring(point.pointClass)
-    f_snapshot_id(marketTimeframe, kind, point.layer, point.direction, point.structureTime, point.structureTime)
-
-f_indexed_unit_structure_id(string marketTimeframe, array<Unit> units, int unitIndex, string structureKind, int layer) =>
-    string result = "na"
-    if not na(unitIndex) and unitIndex >= 0 and unitIndex < array.size(units)
-        result := f_unit_structure_id(marketTimeframe, structureKind, layer, array.get(units, unitIndex))
-    result
-
-f_add_structure_snapshot(array<StructureSnapshot> snapshots, string marketTimeframe, string slotId, string structureKind, int layer, string structureId, string state, int structureTime, int knownTime, string sourceId, string reason) =>
-    array.push(snapshots, StructureSnapshot.new(marketTimeframe, slotId, structureKind, layer, structureId, state, structureTime, knownTime, sourceId, reason))
-
-f_collect_fractal_snapshots(array<StructureSnapshot> snapshots, string marketTimeframe, array<Fractal> endpoints) =>
-    int count = array.size(endpoints)
-    if count > 0
-        for i = 0 to count - 1
-            Fractal current = array.get(endpoints, i)
-            bool terminal = i == count - 1
-            string structureId = f_fractal_structure_id(marketTimeframe, current)
-            string state = terminal ? "candidate" : "confirmed"
-            string sourceId = "raw_time=" + str.tostring(current.structureTime) + "|kind=" + str.tostring(current.kind) + "|price=" + str.tostring(current.price)
-            f_add_structure_snapshot(snapshots, marketTimeframe, structureId, "fractal", -2, structureId, state, current.structureTime, current.confirmationTime, sourceId, terminal ? "terminal_endpoint" : "alternating_endpoint_frozen")
-
-f_collect_stroke_snapshots(array<StructureSnapshot> snapshots, string marketTimeframe, array<Unit> strokes, array<Fractal> endpoints) =>
-    int count = array.size(strokes)
-    if count > 0
-        for i = 0 to count - 1
-            Unit current = array.get(strokes, i)
-            string structureId = f_unit_structure_id(marketTimeframe, "stroke", -2, current)
-            string state = current.confirmed ? "confirmed" : "candidate"
-            int knownTime = current.confirmed ? (na(current.confirmationTime) ? current.endTime : current.confirmationTime) : time
-            string sourceId = "start=na|end=na"
-            if i + 1 < array.size(endpoints)
-                sourceId := "start=" + f_fractal_structure_id(marketTimeframe, array.get(endpoints, i)) + "|end=" + f_fractal_structure_id(marketTimeframe, array.get(endpoints, i + 1))
-            f_add_structure_snapshot(snapshots, marketTimeframe, structureId, "stroke", -2, structureId, state, current.endTime, knownTime, sourceId, current.confirmed ? "boundary_frozen" : "terminal_preview")
-
-f_collect_unit_snapshots(array<StructureSnapshot> snapshots, string marketTimeframe, array<Unit> units, string structureKind, int layer, array<Unit> sourceUnits, string sourceKind, int sourceLayer) =>
-    int count = array.size(units)
-    if count > 0
-        for i = 0 to count - 1
-            Unit current = array.get(units, i)
-            string structureId = f_unit_structure_id(marketTimeframe, structureKind, layer, current)
-            string state = current.confirmed ? "confirmed" : "candidate"
-            int knownTime = current.confirmed ? (na(current.confirmationTime) ? current.endTime : current.confirmationTime) : time
-            string sourceId = "first=" + f_indexed_unit_structure_id(marketTimeframe, sourceUnits, current.firstChild, sourceKind, sourceLayer) + "|last=" + f_indexed_unit_structure_id(marketTimeframe, sourceUnits, current.lastChild, sourceKind, sourceLayer)
-            f_add_structure_snapshot(snapshots, marketTimeframe, structureId, structureKind, layer, structureId, state, current.endTime, knownTime, sourceId, current.confirmed ? "boundary_frozen" : "terminal_preview")
-
-f_collect_center_snapshots(array<StructureSnapshot> snapshots, string marketTimeframe, array<Center> centers, array<Unit> sourceUnits, int layer) =>
-    int count = array.size(centers)
-    if count > 0
-        for i = 0 to count - 1
-            Center current = array.get(centers, i)
-            string sourceKind = layer == 0 ? "segment" : "movement"
-            int sourceLayer = layer - 1
-            string structureId = f_center_structure_id(marketTimeframe, current, sourceUnits, layer)
-            string state = current.confirmed ? "confirmed" : "candidate"
-            int knownTime = current.confirmed ? current.confirmationTime : time
-            string sourceId = "first=" + f_indexed_unit_structure_id(marketTimeframe, sourceUnits, current.startChild, sourceKind, sourceLayer) + "|third=" + f_indexed_unit_structure_id(marketTimeframe, sourceUnits, current.startChild + 2, sourceKind, sourceLayer) + "|last=" + f_indexed_unit_structure_id(marketTimeframe, sourceUnits, current.endChild, sourceKind, sourceLayer)
-            f_add_structure_snapshot(snapshots, marketTimeframe, structureId, "center", layer, structureId, state, current.endTime, knownTime, sourceId, current.confirmed ? "three_component_overlap" : "candidate_uses_unconfirmed_component")
-
-f_collect_trend_snapshot(array<StructureSnapshot> snapshots, string marketTimeframe, TrendState trend, array<Center> centers, array<Unit> sourceUnits, int layer) =>
-    if not na(trend) and trend.kind > 0 and trend.firstCenter >= 0 and trend.lastCenter < array.size(centers)
-        Center first = array.get(centers, trend.firstCenter)
-        Center last = array.get(centers, trend.lastCenter)
-        string structureId = f_snapshot_id(marketTimeframe, "trend_state", layer, trend.direction, first.startTime, last.endTime)
-        string state = trend.status == MOVEMENT_COMPLETED ? "confirmed" : "candidate"
-        string reason = trend.status == MOVEMENT_COMPLETED and trend.completionProof == MOVEMENT_COMPLETED_BY_PROMOTION ? "movement_completed_by_level_promotion" : trend.status == MOVEMENT_COMPLETED ? "movement_completed_by_reverse_component" : trend.status == MOVEMENT_COMPLETION_CANDIDATE ? "divergence_completion_candidate" : trend.status == MOVEMENT_QUALIFIED ? "movement_qualified" : "movement_forming"
-        int knownTime = trend.completionProof == MOVEMENT_COMPLETED_BY_PROMOTION ? last.promotionConfirmationTime : time
-        string sourceId = "first=" + f_center_structure_id(marketTimeframe, first, sourceUnits, layer) + "|last=" + f_center_structure_id(marketTimeframe, last, sourceUnits, layer) + "|completion_proof=" + str.tostring(trend.completionProof)
-        f_add_structure_snapshot(snapshots, marketTimeframe, f_event_prefix(marketTimeframe) + "|T" + str.tostring(layer) + "|trend_state|active", "trend_state", layer, structureId, state, last.endTime, knownTime, sourceId, reason)
-
-f_collect_divergence_snapshots(array<StructureSnapshot> snapshots, string marketTimeframe, array<Divergence> divergences, array<Unit> units, array<Center> centers, int layer) =>
-    int count = array.size(divergences)
-    if count > 0
-        for i = 0 to count - 1
-            Divergence current = array.get(divergences, i)
-            string kind = current.kind == 2 ? "trend_divergence" : "consolidation_divergence"
-            string structureId = f_divergence_structure_id(marketTimeframe, current)
-            string state = not current.valid ? "invalidated" : current.confirmed ? "confirmed" : "candidate"
-            int knownTime = state == "invalidated" ? current.evidenceEndTime : current.confirmed ? current.confirmationTime : current.firstKnownTime
-            string unitKind = layer == 0 ? "segment" : "movement"
-            int unitLayer = layer - 1
-            string sourceCenterId = current.centerIndex >= 0 and current.centerIndex < array.size(centers) ? f_center_structure_id(marketTimeframe, array.get(centers, current.centerIndex), units, layer) : "na"
-            string comparisonCenterId = current.comparisonCenter >= 0 and current.comparisonCenter < array.size(centers) ? f_center_structure_id(marketTimeframe, array.get(centers, current.comparisonCenter), units, layer) : "na"
-            string sourceId = current.kind == 2 ? "a=" + f_indexed_unit_structure_id(marketTimeframe, units, current.firstEnteringUnit, unitKind, unitLayer) + "|A=" + comparisonCenterId + "|b=" + f_indexed_unit_structure_id(marketTimeframe, units, current.enteringUnit, unitKind, unitLayer) + "|B=" + sourceCenterId + "|c=" + f_indexed_unit_structure_id(marketTimeframe, units, current.leavingUnit, unitKind, unitLayer) + "|3p=" + f_indexed_unit_structure_id(marketTimeframe, units, current.thirdPointUnit, unitKind, unitLayer) : "enter=" + f_indexed_unit_structure_id(marketTimeframe, units, current.enteringUnit, unitKind, unitLayer) + "|center=" + sourceCenterId + "|leave=" + f_indexed_unit_structure_id(marketTimeframe, units, current.leavingUnit, unitKind, unitLayer)
-            string reason = state == "invalidated" ? "confirmed_structure_crossed_invalidation" : current.confirmed ? "macd_area_weaker_on_confirmed_component" : "macd_area_weaker_on_candidate_component"
-            f_add_structure_snapshot(snapshots, marketTimeframe, structureId, kind, layer, structureId, state, current.structureTime, knownTime, sourceId, reason)
-
-f_collect_point_snapshots(array<StructureSnapshot> snapshots, string marketTimeframe, array<BuySellPoint> points, array<Unit> units, array<Divergence> divergences, array<Center> centers, array<BuySellPoint> lowerPoints, int layer) =>
-    int count = array.size(points)
-    if count > 0
-        for i = 0 to count - 1
-            BuySellPoint current = array.get(points, i)
-            string kind = "point_" + str.tostring(current.pointClass)
-            string structureId = f_point_structure_id(marketTimeframe, current)
-            string state = not current.valid ? "invalidated" : current.confirmed ? "confirmed" : "candidate"
-            int knownTime = state == "invalidated" ? current.evidenceEndTime : current.confirmed ? current.confirmationTime : current.firstKnownTime
-            string unitKind = layer == 0 ? "segment" : "movement"
-            int unitLayer = layer - 1
-            string sourceId = "source=T" + str.tostring(current.sourceLayer) + "|structure=" + f_indexed_unit_structure_id(marketTimeframe, units, current.structureUnit, unitKind, unitLayer) + "|proof=" + f_indexed_unit_structure_id(marketTimeframe, units, current.proofUnit, unitKind, unitLayer)
-            string causalSourceId = "na"
-            if current.pointClass == 1 and not na(current.sourceDivergence) and current.sourceDivergence >= 0 and current.sourceDivergence < array.size(divergences)
-                causalSourceId := f_divergence_structure_id(marketTimeframe, array.get(divergences, current.sourceDivergence))
-                sourceId += "|divergence=" + causalSourceId
-            else if current.pointClass == 2 and not na(current.linkedFirstPoint)
-                if current.sourceLayer == layer and current.linkedFirstPoint >= 0 and current.linkedFirstPoint < array.size(points)
-                    causalSourceId := f_point_structure_id(marketTimeframe, array.get(points, current.linkedFirstPoint))
-                else if current.sourceLayer == layer - 1 and current.linkedFirstPoint >= 0 and current.linkedFirstPoint < array.size(lowerPoints)
-                    causalSourceId := f_point_structure_id(marketTimeframe, array.get(lowerPoints, current.linkedFirstPoint))
-                sourceId += "|first_point=" + causalSourceId
-            else if current.pointClass == 3 and not na(current.sourceCenter) and current.sourceCenter >= 0 and current.sourceCenter < array.size(centers)
-                causalSourceId := f_center_structure_id(marketTimeframe, array.get(centers, current.sourceCenter), units, layer)
-                sourceId += "|center=" + causalSourceId
-            string reason = state == "invalidated" ? (current.pointClass == 2 ? "completed_opposing_movement" : "confirmed_structure_crossed_invalidation") : current.confirmed ? "point_structure_completed" : "point_structure_candidate"
-            f_add_structure_snapshot(snapshots, marketTimeframe, structureId, kind, layer, structureId, state, current.structureTime, knownTime, sourceId, reason)
-
-f_collect_reference_snapshots(array<StructureSnapshot> snapshots, string marketTimeframe, ReferenceEngine engine) =>
-    array<BuySellPoint> noLowerPoints = array.new<BuySellPoint>()
-    f_collect_fractal_snapshots(snapshots, marketTimeframe, engine.endpoints)
-    f_collect_stroke_snapshots(snapshots, marketTimeframe, engine.strokes, engine.endpoints)
-    f_collect_unit_snapshots(snapshots, marketTimeframe, engine.segmentsS, "segment", -1, engine.strokes, "stroke", -2)
-    f_collect_unit_snapshots(snapshots, marketTimeframe, engine.movementsT0, "movement", 0, engine.segmentsS, "segment", -1)
-    f_collect_unit_snapshots(snapshots, marketTimeframe, engine.movementsT1, "movement", 1, engine.movementsT0, "movement", 0)
-    f_collect_unit_snapshots(snapshots, marketTimeframe, engine.movementsT2, "movement", 2, engine.movementsT1, "movement", 1)
-    f_collect_center_snapshots(snapshots, marketTimeframe, engine.centersT0, engine.segmentsS, 0)
-    f_collect_center_snapshots(snapshots, marketTimeframe, engine.centersT1, engine.movementsT0, 1)
-    f_collect_center_snapshots(snapshots, marketTimeframe, engine.centersT2, engine.movementsT1, 2)
-    f_collect_trend_snapshot(snapshots, marketTimeframe, engine.trendT0, engine.centersT0, engine.segmentsS, 0)
-    f_collect_trend_snapshot(snapshots, marketTimeframe, engine.trendT1, engine.centersT1, engine.movementsT0, 1)
-    f_collect_trend_snapshot(snapshots, marketTimeframe, engine.trendT2, engine.centersT2, engine.movementsT1, 2)
-    f_collect_divergence_snapshots(snapshots, marketTimeframe, engine.divergencesT0, engine.segmentsS, engine.centersT0, 0)
-    f_collect_divergence_snapshots(snapshots, marketTimeframe, engine.divergencesT1, engine.movementsT0, engine.centersT1, 1)
-    f_collect_divergence_snapshots(snapshots, marketTimeframe, engine.divergencesT2, engine.movementsT1, engine.centersT2, 2)
-    f_collect_point_snapshots(snapshots, marketTimeframe, engine.pointsT0, engine.segmentsS, engine.divergencesT0, engine.centersT0, noLowerPoints, 0)
-    f_collect_point_snapshots(snapshots, marketTimeframe, engine.pointsT1, engine.movementsT0, engine.divergencesT1, engine.centersT1, engine.pointsT0, 1)
-    f_collect_point_snapshots(snapshots, marketTimeframe, engine.pointsT2, engine.movementsT1, engine.divergencesT2, engine.centersT2, engine.pointsT1, 2)
-
-f_collect_focus_snapshots(array<StructureSnapshot> snapshots, string marketTimeframe, array<Fractal> endpoints, array<Unit> strokes, array<Unit> segments, array<Unit> movements0, array<Unit> movements1, array<Unit> movements2, array<Unit> movements3, array<Center> centers0, array<Center> centers1, array<Center> centers2, array<Center> centers3, array<Divergence> divergences0, array<Divergence> divergences1, array<Divergence> divergences2, array<Divergence> divergences3, array<BuySellPoint> points0, array<BuySellPoint> points1, array<BuySellPoint> points2, array<BuySellPoint> points3, array<BuySellPoint> noLowerPoints, TrendState trend0, TrendState trend1, TrendState trend2, TrendState trend3) =>
-    f_collect_fractal_snapshots(snapshots, marketTimeframe, endpoints)
-    f_collect_stroke_snapshots(snapshots, marketTimeframe, strokes, endpoints)
-    f_collect_unit_snapshots(snapshots, marketTimeframe, segments, "segment", -1, strokes, "stroke", -2)
-    f_collect_unit_snapshots(snapshots, marketTimeframe, movements0, "movement", 0, segments, "segment", -1)
-    f_collect_unit_snapshots(snapshots, marketTimeframe, movements1, "movement", 1, movements0, "movement", 0)
-    f_collect_unit_snapshots(snapshots, marketTimeframe, movements2, "movement", 2, movements1, "movement", 1)
-    f_collect_unit_snapshots(snapshots, marketTimeframe, movements3, "movement", 3, movements2, "movement", 2)
-    f_collect_center_snapshots(snapshots, marketTimeframe, centers0, segments, 0)
-    f_collect_center_snapshots(snapshots, marketTimeframe, centers1, movements0, 1)
-    f_collect_center_snapshots(snapshots, marketTimeframe, centers2, movements1, 2)
-    f_collect_center_snapshots(snapshots, marketTimeframe, centers3, movements2, 3)
-    f_collect_trend_snapshot(snapshots, marketTimeframe, trend0, centers0, segments, 0)
-    f_collect_trend_snapshot(snapshots, marketTimeframe, trend1, centers1, movements0, 1)
-    f_collect_trend_snapshot(snapshots, marketTimeframe, trend2, centers2, movements1, 2)
-    f_collect_trend_snapshot(snapshots, marketTimeframe, trend3, centers3, movements2, 3)
-    f_collect_divergence_snapshots(snapshots, marketTimeframe, divergences0, segments, centers0, 0)
-    f_collect_divergence_snapshots(snapshots, marketTimeframe, divergences1, movements0, centers1, 1)
-    f_collect_divergence_snapshots(snapshots, marketTimeframe, divergences2, movements1, centers2, 2)
-    f_collect_divergence_snapshots(snapshots, marketTimeframe, divergences3, movements2, centers3, 3)
-    f_collect_point_snapshots(snapshots, marketTimeframe, points0, segments, divergences0, centers0, noLowerPoints, 0)
-    f_collect_point_snapshots(snapshots, marketTimeframe, points1, movements0, divergences1, centers1, points0, 1)
-    f_collect_point_snapshots(snapshots, marketTimeframe, points2, movements1, divergences2, centers2, points1, 2)
-    f_collect_point_snapshots(snapshots, marketTimeframe, points3, movements2, divergences3, centers3, points2, 3)
-
-f_append_lifecycle_event(array<LifecycleEvent> events, StructureSnapshot snapshot, string state, string reason) =>
-    int knownTime = state == "replaced" ? time : snapshot.knownTime
-    int sequence = array.size(events)
-    string eventId = snapshot.structureId + "|reason=" + reason + "|sequence=" + str.tostring(sequence)
-    array.push(events, LifecycleEvent.new(snapshot.structureId, state, snapshot.structureTime, knownTime, snapshot.sourceId, reason, eventId))
-
-f_reconcile_lifecycle(array<StructureSnapshot> previous, array<StructureSnapshot> current, array<LifecycleEvent> events) =>
-    int currentCount = array.size(current)
-    int previousCountBefore = array.size(previous)
-    map<string, int> previousIndexBySlot = map.new<string, int>()
-    map<string, int> currentIndexBySlot = map.new<string, int>()
-    if previousCountBefore > 0
-        for previousIndex = 0 to previousCountBefore - 1
-            map.put(previousIndexBySlot, array.get(previous, previousIndex).slotId, previousIndex)
-    if currentCount > 0
-        for currentIndex = 0 to currentCount - 1
-            map.put(currentIndexBySlot, array.get(current, currentIndex).slotId, currentIndex)
-    bool initializing = previousCountBefore == 0 and array.size(events) == 0
-    if initializing and currentCount > 0
-        for currentIndex = 0 to currentCount - 1
-            StructureSnapshot incoming = array.get(current, currentIndex)
-            f_append_lifecycle_event(events, incoming, incoming.state, incoming.reason)
-
-    int previousCount = array.size(previous)
-    if previousCount > 0
-        for previousIndex = 0 to previousCount - 1
-            StructureSnapshot old = array.get(previous, previousIndex)
-            int activeIndex = map.get(currentIndexBySlot, old.slotId)
-            bool stillActive = not na(activeIndex)
-            if not stillActive and old.state == "candidate"
-                f_append_lifecycle_event(events, old, "replaced", "candidate_no_longer_active")
-
-    if not initializing and currentCount > 0
-        for currentIndex = 0 to currentCount - 1
-            StructureSnapshot incoming = array.get(current, currentIndex)
-            int previousIndex = map.get(previousIndexBySlot, incoming.slotId)
-            if na(previousIndex)
-                f_append_lifecycle_event(events, incoming, incoming.state, incoming.reason)
-            else
-                StructureSnapshot old = array.get(previous, previousIndex)
-                if old.structureId != incoming.structureId
-                    if old.state == "candidate"
-                        f_append_lifecycle_event(events, old, "replaced", "more_extreme_or_new_terminal_candidate")
-                    f_append_lifecycle_event(events, incoming, incoming.state, incoming.reason)
-                else if old.state != incoming.state
-                    f_append_lifecycle_event(events, incoming, incoming.state, incoming.reason)
-                else if old.reason != incoming.reason
-                    f_append_lifecycle_event(events, incoming, incoming.state, incoming.reason)
-
-    array.clear(previous)
-    if currentCount > 0
-        for currentIndex = 0 to currentCount - 1
-            array.push(previous, array.get(current, currentIndex))
-    events
 
 f_upsert_evidence(array<Evidence> ledger, Evidence incoming) =>
     // 证据身份必须包含结构时间：同层同方向可以同时存在多条来自不同
@@ -2154,20 +1863,6 @@ referenceEngine1 := f_ingest_reference(referenceEnabled1, referenceSourceTime1, 
 referenceEngine2 := f_ingest_reference(referenceEnabled2, referenceSourceTime2, referenceSourceHigh2, referenceSourceLow2, referenceSourceDif2, referenceSourceHist2, time, referenceEngine2, true)
 referenceEngine3 := f_ingest_reference(referenceEnabled3, referenceSourceTime3, referenceSourceHigh3, referenceSourceLow3, referenceSourceDif3, referenceSourceHist3, time, referenceEngine3, true)
 referenceEngine4 := f_ingest_reference(referenceEnabled4, referenceSourceTime4, referenceSourceHigh4, referenceSourceLow4, referenceSourceDif4, referenceSourceHist4, time, referenceEngine4, true)
-// 历史阶段的逐边界重建只服务于生命周期快照；账本关闭时参考结构
-// 推迟到最后一根 K 线一次性重建，证据、共振与提醒不受影响。
-bool referenceStructuresDirty1 = referenceEngine1.state.structuresDirty and enableLifecycleHistory
-bool referenceStructuresDirty2 = referenceEngine2.state.structuresDirty and enableLifecycleHistory
-bool referenceStructuresDirty3 = referenceEngine3.state.structuresDirty and enableLifecycleHistory
-bool referenceStructuresDirty4 = referenceEngine4.state.structuresDirty and enableLifecycleHistory
-if referenceStructuresDirty1
-    referenceEngine1 := f_build_reference_engine(referenceEngine1)
-if referenceStructuresDirty2
-    referenceEngine2 := f_build_reference_engine(referenceEngine2)
-if referenceStructuresDirty3
-    referenceEngine3 := f_build_reference_engine(referenceEngine3)
-if referenceStructuresDirty4
-    referenceEngine4 := f_build_reference_engine(referenceEngine4)
 
 var array<KBar> syntheticBars = array.new<KBar>()
 var array<Fractal> baseFractals = array.new<Fractal>()
@@ -2196,14 +1891,6 @@ var array<BuySellPoint> pointsT0 = array.new<BuySellPoint>()
 var array<BuySellPoint> pointsT1 = array.new<BuySellPoint>()
 var array<BuySellPoint> pointsT2 = array.new<BuySellPoint>()
 var array<BuySellPoint> pointsT3 = array.new<BuySellPoint>()
-var array<BuySellPoint> noLowerPointSources = array.new<BuySellPoint>()
-varip array<StructureSnapshot> previousFocusStructureSnapshots = array.new<StructureSnapshot>()
-varip array<StructureSnapshot> previousReferenceStructureSnapshots1 = array.new<StructureSnapshot>()
-varip array<StructureSnapshot> previousReferenceStructureSnapshots2 = array.new<StructureSnapshot>()
-varip array<StructureSnapshot> previousReferenceStructureSnapshots3 = array.new<StructureSnapshot>()
-varip array<StructureSnapshot> previousReferenceStructureSnapshots4 = array.new<StructureSnapshot>()
-var array<StructureSnapshot> currentStructureSnapshots = array.new<StructureSnapshot>()
-var array<LifecycleEvent> lifecycleEvents = array.new<LifecycleEvent>()
 var array<Evidence> activeEvidence = array.new<Evidence>()
 var array<Evidence> nestingEvidence = array.new<Evidence>()
 var array<Resonance> activeResonances = array.new<Resonance>()
@@ -2227,7 +1914,6 @@ var int seedDirection = 0
 var int lastProcessedRawIndex = na
 var int dataStartTime = na
 var int reliableStartTime = na
-var bool focusStructuresDirty = false
 
 float normalizedHigh = math.round_to_mintick(high)
 float normalizedLow = math.round_to_mintick(low)
@@ -2265,49 +1951,18 @@ if confirmedRawBar and (na(lastProcessedRawIndex) or bar_index != lastProcessedR
         Fractal confirmedFractal = f_detect_confirmed_fractal(syntheticBars, time)
         if not na(confirmedFractal)
             array.push(baseFractals, confirmedFractal)
-            bool structuresChanged = f_update_strokes(strokeEndpoints, strokes, confirmedFractal, posAreaCums, negAreaCums, difValues, true)
-            focusStructuresDirty := focusStructuresDirty or structuresChanged
+            f_update_strokes(strokeEndpoints, strokes, confirmedFractal, posAreaCums, negAreaCums, difValues, true)
 
-bool focusReplayDirty = confirmedRawBar and focusStructuresDirty and enableLifecycleHistory
-if focusReplayDirty
-    [historyTrendT0, historyTrendT1, historyTrendT2, historyTrendT3] = f_build_focus_hierarchy(strokes, posAreaCums, negAreaCums, difValues, segmentsS, movementsT0, movementsT1, movementsT2, movementsT3, centersT0, centersT1, centersT2, centersT3, divergencesT0, divergencesT1, divergencesT2, divergencesT3, pointsT0, pointsT1, pointsT2, pointsT3)
-    trendT0 := historyTrendT0
-    trendT1 := historyTrendT1
-    trendT2 := historyTrendT2
-    trendT3 := historyTrendT3
-    focusStructuresDirty := false
-
-if focusReplayDirty
-    array.clear(currentStructureSnapshots)
-    f_collect_focus_snapshots(currentStructureSnapshots, timeframe.period, strokeEndpoints, strokes, segmentsS, movementsT0, movementsT1, movementsT2, movementsT3, centersT0, centersT1, centersT2, centersT3, divergencesT0, divergencesT1, divergencesT2, divergencesT3, pointsT0, pointsT1, pointsT2, pointsT3, noLowerPointSources, trendT0, trendT1, trendT2, trendT3)
-    lifecycleEvents := f_reconcile_lifecycle(previousFocusStructureSnapshots, currentStructureSnapshots, lifecycleEvents)
-if referenceStructuresDirty1
-    array.clear(currentStructureSnapshots)
-    f_collect_reference_snapshots(currentStructureSnapshots, referenceTimeframe1, referenceEngine1)
-    lifecycleEvents := f_reconcile_lifecycle(previousReferenceStructureSnapshots1, currentStructureSnapshots, lifecycleEvents)
-if referenceStructuresDirty2
-    array.clear(currentStructureSnapshots)
-    f_collect_reference_snapshots(currentStructureSnapshots, referenceTimeframe2, referenceEngine2)
-    lifecycleEvents := f_reconcile_lifecycle(previousReferenceStructureSnapshots2, currentStructureSnapshots, lifecycleEvents)
-if referenceStructuresDirty3
-    array.clear(currentStructureSnapshots)
-    f_collect_reference_snapshots(currentStructureSnapshots, referenceTimeframe3, referenceEngine3)
-    lifecycleEvents := f_reconcile_lifecycle(previousReferenceStructureSnapshots3, currentStructureSnapshots, lifecycleEvents)
-if referenceStructuresDirty4
-    array.clear(currentStructureSnapshots)
-    f_collect_reference_snapshots(currentStructureSnapshots, referenceTimeframe4, referenceEngine4)
-    lifecycleEvents := f_reconcile_lifecycle(previousReferenceStructureSnapshots4, currentStructureSnapshots, lifecycleEvents)
 
 if barstate.islast
-    // 账本关闭时参考结构在此处一次性重建；dirty 标记只在重建时清除，
-    // 因此实时阶段仍然只随参考周期收盘重建一次。
-    if referenceEnabled1 and referenceEngine1.state.structuresDirty and not enableLifecycleHistory
+    // 参考结构只在最后一根 K 线按自身已收盘状态重建。
+    if referenceEnabled1 and referenceEngine1.state.structuresDirty
         referenceEngine1 := f_build_reference_engine(referenceEngine1)
-    if referenceEnabled2 and referenceEngine2.state.structuresDirty and not enableLifecycleHistory
+    if referenceEnabled2 and referenceEngine2.state.structuresDirty
         referenceEngine2 := f_build_reference_engine(referenceEngine2)
-    if referenceEnabled3 and referenceEngine3.state.structuresDirty and not enableLifecycleHistory
+    if referenceEnabled3 and referenceEngine3.state.structuresDirty
         referenceEngine3 := f_build_reference_engine(referenceEngine3)
-    if referenceEnabled4 and referenceEngine4.state.structuresDirty and not enableLifecycleHistory
+    if referenceEnabled4 and referenceEngine4.state.structuresDirty
         referenceEngine4 := f_build_reference_engine(referenceEngine4)
     viewSyntheticBars := f_tail_isolated_kbars(syntheticBars)
     viewStrokeEndpoints := array.copy(strokeEndpoints)
@@ -2349,17 +2004,6 @@ if barstate.islast
     trendT3 := currentTrendT3
     if na(reliableStartTime) and bar_index >= MACD_WARMUP_BARS and f_has_reliable_confirmed_center(segmentsS, MACD_WARMUP_BARS)
         reliableStartTime := time
-    array.clear(currentStructureSnapshots)
-    if enableLifecycleHistory
-        f_collect_focus_snapshots(currentStructureSnapshots, timeframe.period, viewStrokeEndpoints, viewStrokes, segmentsS, movementsT0, movementsT1, movementsT2, movementsT3, centersT0, centersT1, centersT2, centersT3, divergencesT0, divergencesT1, divergencesT2, divergencesT3, pointsT0, pointsT1, pointsT2, pointsT3, noLowerPointSources, trendT0, trendT1, trendT2, trendT3)
-        if referenceEnabled1
-            f_collect_reference_snapshots(currentStructureSnapshots, referenceTimeframe1, referenceEngine1)
-        if referenceEnabled2
-            f_collect_reference_snapshots(currentStructureSnapshots, referenceTimeframe2, referenceEngine2)
-        if referenceEnabled3
-            f_collect_reference_snapshots(currentStructureSnapshots, referenceTimeframe3, referenceEngine3)
-        if referenceEnabled4
-            f_collect_reference_snapshots(currentStructureSnapshots, referenceTimeframe4, referenceEngine4)
     array.clear(activeEvidence)
     f_collect_layer_evidence(activeEvidence, 0, timeframe.period, segmentsS, divergencesT0, pointsT0)
     f_collect_layer_evidence(activeEvidence, 0, timeframe.period, movementsT0, divergencesT1, pointsT1)
@@ -2630,26 +2274,6 @@ f_scenario_tooltip(array<Scenario> scenarios) =>
             result += "\n" + str.tostring(scenarioIndex + 1) + ". " + scenario.name + "｜触发: " + scenario.triggerText + "｜失效: " + scenario.invalidationText
     result
 
-f_trade_signal_summary(array<Evidence> ledger) =>
-    string result = "无活动信号"
-    int resultDirection = 0
-    bool resultConfirmed = false
-    int latestKnownTime = na
-    int latestPriority = 0
-    int evidenceCount = array.size(ledger)
-    if evidenceCount > 0
-        for evidenceIndex = 0 to evidenceCount - 1
-            Evidence evidence = array.get(ledger, evidenceIndex)
-            int priority = evidence.kind >= 11 ? 2 : 1
-            bool later = not na(evidence.knownTime) and (na(latestKnownTime) or evidence.knownTime > latestKnownTime or (evidence.knownTime == latestKnownTime and priority > latestPriority))
-            if later
-                string kindText = evidence.kind == 1 ? "盘背" : evidence.kind == 2 ? "趋背" : evidence.kind == 11 ? "1类" : evidence.kind == 12 ? "2类" : "3类"
-                result := kindText + (evidence.direction == 1 ? "买" : "卖") + "·" + evidence.marketTimeframe + "·T" + str.tostring(evidence.layer) + "·" + (evidence.confirmed ? "确认" : "候选")
-                resultDirection := evidence.direction
-                resultConfirmed := evidence.confirmed
-                latestKnownTime := evidence.knownTime
-                latestPriority := priority
-    [result, resultDirection, resultConfirmed]
 
 f_build_execution_state(array<Evidence> ledger, bool reliable, bool resourceClipped) =>
     ExecutionState result = ExecutionState.new(EXECUTION_DATA_INSUFFICIENT, 0, na, 0, na, na, na)
@@ -3000,8 +2624,7 @@ if barstate.islast
     f_panel_cell(statusPanel, 1, 28, str.tostring(array.size(structureLines)) + "/" + str.tostring(array.size(structureBoxes)) + "/" + str.tostring(array.size(structureLabels)))
     f_panel_cell(statusPanel, 0, 29, "活动结构 / 历史事件")
     string engineStatus = not standardChart ? "确认/参考均已停止" : barstate.isconfirmed ? "收盘确认状态" : "活动K候选预览·确认冻结"
-    string lifecycleStatus = enableLifecycleHistory ? str.tostring(array.size(currentStructureSnapshots)) + " / " + str.tostring(array.size(lifecycleEvents)) : "账本关闭"
-    f_panel_cell(statusPanel, 1, 29, lifecycleStatus + " · " + engineStatus)
+    f_panel_cell(statusPanel, 1, 29, engineStatus)
     f_panel_cell(statusPanel, 0, 30, "参考 1")
     f_panel_cell(statusPanel, 1, 30, f_reference_summary(referenceRequested1, referenceEnabled1, referenceTimeframe1, referenceEngine1))
     f_panel_cell(statusPanel, 0, 31, "参考 2")

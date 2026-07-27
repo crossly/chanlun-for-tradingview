@@ -65,8 +65,6 @@ class CourseV2ContractTest(unittest.TestCase):
             self.assertRegex(SOURCE, rf"\b{field}\b")
         self.assertIn("confirmedThirdPoint and not na(leavingIndex)", SOURCE)
         self.assertIn("array.get(centers, comparisonCenter).startChild", SOURCE)
-        self.assertIn('"a=" + f_indexed_unit_structure_id(', SOURCE)
-        self.assertIn('"|3p=" + f_indexed_unit_structure_id(', SOURCE)
 
     def test_points_support_weak_and_cross_level_second_class(self) -> None:
         self.assertIn("int sourceLayer", SOURCE)
@@ -180,89 +178,6 @@ class CourseV2ContractTest(unittest.TestCase):
             trend_body,
         )
 
-    def test_lifecycle_history_is_append_only(self) -> None:
-        self.assertIn('"replaced"', SOURCE)
-        self.assertIn('"invalidated"', SOURCE)
-        self.assertIn("var array<LifecycleEvent> lifecycleEvents", SOURCE)
-        self.assertNotIn("array.clear(lifecycleEvents)", SOURCE)
-        self.assertNotIn("array.shift(lifecycleEvents)", SOURCE)
-        event_type = re.search(
-            r"type LifecycleEvent(?P<body>.*?)type ReferenceState",
-            SOURCE,
-            flags=re.DOTALL,
-        )
-        self.assertIsNotNone(event_type)
-        self.assertNotIn("marketTimeframe", event_type.group("body"))
-        self.assertNotIn("structureKind", event_type.group("body"))
-        self.assertNotIn("int layer", event_type.group("body"))
-
-    def test_lifecycle_history_replays_during_historical_execution(self) -> None:
-        self.assertIn("bool focusStructuresDirty", SOURCE)
-        self.assertIn("state.structuresDirty", SOURCE)
-        self.assertIn("previousFocusStructureSnapshots", SOURCE)
-        self.assertIn("previousReferenceStructureSnapshots4", SOURCE)
-        self.assertNotIn("bool lifecycleReplayStep", SOURCE)
-        replay_block = re.search(
-            r"if focusReplayDirty(?P<body>.*?)if barstate\.islast",
-            SOURCE,
-            flags=re.DOTALL,
-        )
-        self.assertIsNotNone(replay_block)
-        self.assertIn(
-            "f_reconcile_lifecycle(previousFocusStructureSnapshots",
-            replay_block.group("body"),
-        )
-        self.assertIn(
-            "f_reconcile_lifecycle(previousReferenceStructureSnapshots4",
-            replay_block.group("body"),
-        )
-
-    def test_realtime_preview_does_not_mutate_confirmed_lifecycle_history(self) -> None:
-        preview_block = SOURCE.split("if barstate.islast", maxsplit=1)[1]
-        self.assertNotIn("f_reconcile_lifecycle", preview_block)
-
-    def test_lifecycle_reconcile_indexes_snapshot_slots(self) -> None:
-        self.assertIn("map<string, int> previousIndexBySlot", SOURCE)
-        self.assertIn("map<string, int> currentIndexBySlot", SOURCE)
-        self.assertIn("map.get(previousIndexBySlot, incoming.slotId)", SOURCE)
-        self.assertIn("map.get(currentIndexBySlot, old.slotId)", SOURCE)
-        self.assertNotIn("for candidateIndex = 0 to previousCount - 1", SOURCE)
-
-    def test_lifecycle_phase_reason_is_part_of_event_identity(self) -> None:
-        self.assertIn('"|reason=" + reason', SOURCE)
-        self.assertIn('"|sequence=" + str.tostring(sequence)', SOURCE)
-        self.assertNotIn("f_lifecycle_occurrence", SOURCE)
-        self.assertIn("old.reason != incoming.reason", SOURCE)
-
-    def test_lifecycle_replaces_disappeared_candidate_before_successor(self) -> None:
-        reconcile = re.search(
-            r"f_reconcile_lifecycle\(.*?\) =>(?P<body>.*?)\n\nf_upsert_evidence",
-            SOURCE,
-            flags=re.DOTALL,
-        )
-        self.assertIsNotNone(reconcile)
-        body = reconcile.group("body")
-        replaced_index = body.index('"candidate_no_longer_active"')
-        successor_index = body.index("if not initializing and currentCount > 0")
-        self.assertLess(replaced_index, successor_index)
-
-    def test_lifecycle_sources_use_stable_structure_ids(self) -> None:
-        self.assertIn("f_unit_structure_id", SOURCE)
-        self.assertIn("f_center_structure_id", SOURCE)
-        self.assertIn('"first=" + f_indexed_unit_structure_id(', SOURCE)
-        self.assertNotIn('"children=" + str.tostring(', SOURCE)
-        self.assertNotIn('"components=" + str.tostring(', SOURCE)
-        self.assertNotIn('"divergence=" + str.tostring(', SOURCE)
-
-    def test_point_lifecycle_sources_preserve_causal_structure_ids(self) -> None:
-        self.assertIn("f_divergence_structure_id", SOURCE)
-        self.assertIn('"|divergence=" + causalSourceId', SOURCE)
-        self.assertIn('"|first_point=" + causalSourceId', SOURCE)
-        self.assertIn('"|center=" + causalSourceId', SOURCE)
-        self.assertNotIn(
-            'str.tostring(current.structureTime) + "@" + str.tostring(current.structureIndex)',
-            SOURCE,
-        )
 
     def test_departure_detection_is_direction_aware(self) -> None:
         # ADR 0046: leaving units start inside the core, so whole-unit
@@ -289,19 +204,6 @@ class CourseV2ContractTest(unittest.TestCase):
             "current.confirmed == incoming.confirmed and current.structureTime == incoming.structureTime",
             SOURCE,
         )
-
-    def test_lifecycle_history_is_gated_and_defaults_off(self) -> None:
-        # ADR 0048: the append-only lifecycle ledger with per-boundary
-        # full rebuilds does not fit the free-plan time/memory budget
-        # together with four reference timeframes, so it defaults off.
-        self.assertIn('bool enableLifecycleHistory = input.bool(false, "历史生命周期账本（重负载）"', SOURCE)
-        self.assertIn("bool focusReplayDirty = confirmedRawBar and focusStructuresDirty and enableLifecycleHistory", SOURCE)
-        self.assertIn("referenceEngine1.state.structuresDirty and enableLifecycleHistory", SOURCE)
-        self.assertIn("referenceEngine4.state.structuresDirty and enableLifecycleHistory", SOURCE)
-        # with the ledger off, reference structures rebuild once on the
-        # last bar instead of on every historical boundary
-        self.assertIn("referenceEngine1.state.structuresDirty and not enableLifecycleHistory", SOURCE)
-        self.assertIn("referenceEngine4.state.structuresDirty and not enableLifecycleHistory", SOURCE)
 
     def test_candidate_extension_does_not_trigger_historical_replay(self) -> None:
         # ADR 0047: moving the terminal candidate endpoint must not mark
