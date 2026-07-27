@@ -33,6 +33,7 @@ int EXECUTION_OBSERVE = 1
 int EXECUTION_WAIT_CONFIRMATION = 2
 int EXECUTION_READY = 3
 int EXECUTION_CONFLICT = 4
+int MAX_DIVERGENCE_CONNECTORS = 48
 
 string viewPreset = input.string("标准", "显示预设", options = ["交易", "简洁", "标准", "研究"], group = GROUP_VIEW)
 string colorTheme = input.string("TradingView", "颜色主题", options = ["TradingView", "中国市场", "色觉友好"], group = GROUP_VIEW)
@@ -2400,7 +2401,7 @@ f_draw_centers(array<Center> centers, array<box> boxes, array<label> labels, col
                     label centerLabel = label.new(current.endIndex, current.zg, centerText, xloc = xloc.bar_index, style = label.style_label_left, color = color.new(centerColor, 74), textcolor = foregroundColor, size = size.tiny, tooltip = centerTooltip)
                     array.push(labels, centerLabel)
 
-f_draw_divergences(array<Divergence> divergences, array<label> labels, color layerColor, int maxDraw, int detailBars, bool activeOnly, bool compactTrading) =>
+f_draw_divergences(array<Unit> units, array<Divergence> divergences, array<polyline> connectors, array<label> labels, color layerColor, int maxDraw, int detailBars, bool activeOnly, bool compactTrading) =>
     int divergenceCount = array.size(divergences)
     int drawnCount = 0
     if divergenceCount > 0 and maxDraw > 0
@@ -2409,17 +2410,34 @@ f_draw_divergences(array<Divergence> divergences, array<label> labels, color lay
                 break
             int i = divergenceCount - 1 - offset
             Divergence current = array.get(divergences, i)
-            bool activeVisible = not activeOnly or not current.confirmed or current.valid
+            bool invalid = current.confirmed and not current.valid
+            bool activeVisible = not activeOnly or not invalid
             if activeVisible and current.structureIndex >= bar_index - detailBars and (current.confirmed or showCandidates) and array.size(labels) < 480
-                color divergenceColor = current.confirmed ? layerColor : candidateColor
+                bool validSources = not na(current.enteringUnit) and current.enteringUnit >= 0 and current.enteringUnit < array.size(units) and not na(current.leavingUnit) and current.leavingUnit >= 0 and current.leavingUnit < array.size(units)
+                color divergenceColor = invalid ? color.new(foregroundColor, 60) : current.invalidationCandidate ? warningColor : current.confirmed ? layerColor : candidateColor
                 string kindText = current.kind == 2 ? "趋背" : "盘背"
-                string stateText = current.confirmed ? "确" : "候"
+                string stateText = invalid ? "失" : current.invalidationCandidate ? "失候" : current.confirmed ? "确" : "候"
                 string divergenceText = compactTrading ? kindText + (current.direction == 1 ? "卖" : "买") + "·T" + str.tostring(current.layer) : kindText + "·T" + str.tostring(current.layer) + "·" + stateText
                 string difText = current.difWeaker ? "减弱" : "未减弱"
                 string usageText = current.kind == 2 ? "趋势完成候选，等待反向确认" : "单中枢减弱，不直接确认一类点"
-                string divergenceTooltip = "MACD 同向面积: " + str.tostring(current.enteringArea, "#.####") + " -> " + str.tostring(current.leavingArea, "#.####") + "\n面积比: " + str.tostring(current.areaRatio, "#.###") + "\nDIF 极值: " + difText + "\n解释: " + usageText + "\n结构时间: " + str.format_time(current.structureTime, "yyyy-MM-dd HH:mm") + (current.confirmed ? "\n确认时间: " + str.format_time(current.confirmationTime, "yyyy-MM-dd HH:mm") : "")
+                string validityText = invalid ? "已失效" : current.invalidationCandidate ? "失效候选" : current.confirmed ? "已确认有效" : "候选"
+                string sourceText = validSources ? "\n比较段: #" + str.tostring(current.enteringUnit) + " -> #" + str.tostring(current.leavingUnit) : "\n比较段: 来源缺失"
+                string centerText = "\n来源中枢: #" + str.tostring(current.centerIndex) + (current.kind == 2 ? "\n比较中枢: #" + str.tostring(current.comparisonCenter) : "")
+                string invalidationText = invalid and not na(current.evidenceEndTime) ? "\n失效时间: " + str.format_time(current.evidenceEndTime, "yyyy-MM-dd HH:mm") : ""
+                string divergenceTooltip = "状态: " + validityText + sourceText + centerText + "\nMACD 同向面积: " + str.tostring(current.enteringArea, "#.####") + " -> " + str.tostring(current.leavingArea, "#.####") + "\n面积比: " + str.tostring(current.areaRatio, "#.###") + "\nDIF 极值: " + difText + "\n解释: " + usageText + "\n结构时间: " + str.format_time(current.structureTime, "yyyy-MM-dd HH:mm") + (current.confirmed ? "\n确认时间: " + str.format_time(current.confirmationTime, "yyyy-MM-dd HH:mm") : "") + invalidationText
+                if validSources and array.size(connectors) < MAX_DIVERGENCE_CONNECTORS
+                    Unit entering = array.get(units, current.enteringUnit)
+                    Unit leaving = array.get(units, current.leavingUnit)
+                    array<chart.point> comparisonPoints = array.new<chart.point>()
+                    array.push(comparisonPoints, chart.point.from_time(entering.endTime, entering.endPrice))
+                    array.push(comparisonPoints, chart.point.from_time(leaving.endTime, leaving.endPrice))
+                    string connectorStyle = invalid ? line.style_dotted : current.confirmed and not current.invalidationCandidate ? line.style_solid : line.style_dashed
+                    int connectorWidth = current.kind == 2 ? 2 : 1
+                    polyline connector = polyline.new(comparisonPoints, curved = false, closed = false, xloc = xloc.bar_time, line_color = color.new(divergenceColor, invalid ? 45 : 8), line_style = connectorStyle, line_width = connectorWidth)
+                    array.push(connectors, connector)
                 string divergenceStyle = current.direction == 1 ? label.style_label_down : label.style_label_up
-                label divergenceLabel = label.new(current.structureIndex, current.structurePrice, divergenceText, xloc = xloc.bar_index, style = divergenceStyle, color = color.new(divergenceColor, current.confirmed ? 18 : 55), textcolor = foregroundColor, size = compactTrading ? size.small : size.tiny, tooltip = divergenceTooltip)
+                int labelTransparency = invalid ? 72 : current.confirmed ? 18 : 55
+                label divergenceLabel = label.new(current.structureIndex, current.structurePrice, divergenceText, xloc = xloc.bar_index, style = divergenceStyle, color = color.new(divergenceColor, labelTransparency), textcolor = foregroundColor, size = compactTrading ? size.small : size.tiny, tooltip = divergenceTooltip)
                 array.push(labels, divergenceLabel)
                 drawnCount += 1
 
@@ -2479,6 +2497,7 @@ f_draw_scenarios(array<Scenario> scenarios, array<line> lines, array<label> labe
 var array<line> structureLines = array.new<line>()
 var array<label> structureLabels = array.new<label>()
 var array<box> structureBoxes = array.new<box>()
+var array<polyline> divergenceConnectors = array.new<polyline>()
 bool tradingView = viewPreset == "交易"
 int pointRenderBudget = tradingView ? 220 : viewPreset == "简洁" ? 120 : viewPreset == "标准" ? 300 : 260
 int totalPointHistory = array.size(pointsT0) + array.size(pointsT1) + array.size(pointsT2) + array.size(pointsT3)
@@ -2500,6 +2519,11 @@ if barstate.islast
         for i = 0 to oldBoxCount - 1
             box.delete(array.get(structureBoxes, i))
         array.clear(structureBoxes)
+    int oldConnectorCount = array.size(divergenceConnectors)
+    if oldConnectorCount > 0
+        for i = 0 to oldConnectorCount - 1
+            polyline.delete(array.get(divergenceConnectors, i))
+        array.clear(divergenceConnectors)
 
     int strokeCountForDraw = array.size(viewStrokes)
     if showStrokes and (viewPreset == "标准" or viewPreset == "研究") and strokeCountForDraw > 0
@@ -2564,10 +2588,10 @@ if barstate.islast
     f_draw_centers(centersT3, structureBoxes, structureLabels, layer3Color, l3CenterDraw, detailBars, showWaveCenters)
 
     int divergenceDraw = not showDivergences ? 0 : tradingView ? 4 : viewPreset == "简洁" ? 1 : viewPreset == "标准" ? 10 : 12
-    f_draw_divergences(divergencesT0, structureLabels, foregroundColor, divergenceDraw, detailBars, tradingView, tradingView)
-    f_draw_divergences(divergencesT1, structureLabels, layer1Color, divergenceDraw, detailBars, tradingView, tradingView)
-    f_draw_divergences(divergencesT2, structureLabels, layer2Color, divergenceDraw, detailBars, tradingView, tradingView)
-    f_draw_divergences(divergencesT3, structureLabels, layer3Color, divergenceDraw, detailBars, tradingView, tradingView)
+    f_draw_divergences(segmentsS, divergencesT0, divergenceConnectors, structureLabels, foregroundColor, divergenceDraw, detailBars, tradingView, tradingView)
+    f_draw_divergences(movementsT0, divergencesT1, divergenceConnectors, structureLabels, layer1Color, divergenceDraw, detailBars, tradingView, tradingView)
+    f_draw_divergences(movementsT1, divergencesT2, divergenceConnectors, structureLabels, layer2Color, divergenceDraw, detailBars, tradingView, tradingView)
+    f_draw_divergences(movementsT2, divergencesT3, divergenceConnectors, structureLabels, layer3Color, divergenceDraw, detailBars, tradingView, tradingView)
 
     int remainingPointBudget = (showBuySellPoints or showEvidenceRanges) ? pointRenderBudget : 0
     remainingPointBudget -= f_draw_points(pointsT3, structureLines, structureLabels, remainingPointBudget, detailBars, tradingView, showBuySellPoints, showEvidenceRanges, tradingView)

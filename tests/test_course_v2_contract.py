@@ -347,6 +347,57 @@ class CourseV2ContractTest(unittest.TestCase):
         self.assertIn('"\\n解释: " + usageText', SOURCE)
         self.assertIn("string divergenceStyle = current.direction == 1 ? label.style_label_down : label.style_label_up", SOURCE)
 
+    def test_divergence_draws_the_actual_strength_comparison_units(self) -> None:
+        divergence_drawer = re.search(
+            r"f_draw_divergences\(.*?\) =>(?P<body>.*?)\n\nf_draw_points",
+            SOURCE,
+            flags=re.DOTALL,
+        )
+        self.assertIsNotNone(divergence_drawer)
+        body = divergence_drawer.group("body")
+        self.assertIn("Unit entering = array.get(units, current.enteringUnit)", body)
+        self.assertIn("Unit leaving = array.get(units, current.leavingUnit)", body)
+        self.assertIn(
+            "chart.point.from_time(entering.endTime, entering.endPrice)",
+            body,
+        )
+        self.assertIn(
+            "chart.point.from_time(leaving.endTime, leaving.endPrice)",
+            body,
+        )
+        self.assertIn("polyline.new(comparisonPoints", body)
+        self.assertNotIn("current.firstEnteringUnit", body)
+
+        for call in (
+            "f_draw_divergences(segmentsS, divergencesT0",
+            "f_draw_divergences(movementsT0, divergencesT1",
+            "f_draw_divergences(movementsT1, divergencesT2",
+            "f_draw_divergences(movementsT2, divergencesT3",
+        ):
+            self.assertIn(call, SOURCE)
+
+    def test_divergence_visual_state_distinguishes_invalid_history(self) -> None:
+        self.assertIn(
+            "bool invalid = current.confirmed and not current.valid",
+            SOURCE,
+        )
+        self.assertIn(
+            'string stateText = invalid ? "失" : '
+            'current.invalidationCandidate ? "失候" : '
+            'current.confirmed ? "确" : "候"',
+            SOURCE,
+        )
+        self.assertIn(
+            "string connectorStyle = invalid ? line.style_dotted",
+            SOURCE,
+        )
+        self.assertIn("polyline.delete(array.get(divergenceConnectors, i))", SOURCE)
+        self.assertIn("int MAX_DIVERGENCE_CONNECTORS = 48", SOURCE)
+        self.assertIn(
+            "array.size(connectors) < MAX_DIVERGENCE_CONNECTORS",
+            SOURCE,
+        )
+
     def test_center_tooltip_exposes_departure_and_retest_context(self) -> None:
         self.assertIn('current.leaveState == 2 ? "\\n离开确认: "', SOURCE)
         self.assertIn('"·回试#" + str.tostring(current.retestChild)', SOURCE)
