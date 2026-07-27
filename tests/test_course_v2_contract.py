@@ -15,6 +15,16 @@ class CourseV2ContractTest(unittest.TestCase):
         self.assertNotIn('"修订笔"', SOURCE)
         self.assertNotIn('"严格笔"', SOURCE)
 
+    def test_fast_render_density_is_default_and_full_density_remains_available(self) -> None:
+        self.assertIn('string renderDensity = input.string("快速", "绘图密度"', SOURCE)
+        self.assertIn('options = ["快速", "完整"]', SOURCE)
+        self.assertIn('bool fullGeometry = renderDensity == "完整"', SOURCE)
+        self.assertIn('int pointRenderBudget = fullGeometry ?', SOURCE)
+        self.assertIn('viewPreset == "标准" ? 120 : 140', SOURCE)
+        self.assertIn('int strokeDrawBudget = fullGeometry ?', SOURCE)
+        self.assertIn('int l1DrawBudget = fullGeometry ?', SOURCE)
+        self.assertIn('int divergenceDraw = not showDivergences ? 0 : fullGeometry ?', SOURCE)
+
     def test_stroke_requires_both_distances_without_extra_raw_extreme_gate(self) -> None:
         self.assertIn("math.abs(newFractal.kPosition - lastEndpoint.kPosition) >= 3", SOURCE)
         self.assertIn("math.abs(newFractal.structureIndex - lastEndpoint.structureIndex) >= 4", SOURCE)

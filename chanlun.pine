@@ -40,6 +40,7 @@ int EXECUTION_CONFLICT = 4
 int MAX_DIVERGENCE_CONNECTORS = 48
 
 string viewPreset = input.string("标准", "显示预设", options = ["交易", "简洁", "标准", "研究"], group = GROUP_VIEW)
+string renderDensity = input.string("快速", "绘图密度", options = ["快速", "完整"], group = GROUP_VIEW)
 string colorTheme = input.string("TradingView", "颜色主题", options = ["TradingView", "中国市场", "色觉友好"], group = GROUP_VIEW)
 int detailBars = input.int(2000, "详细绘图窗口", minval = 300, maxval = 5000, step = 100, group = GROUP_VIEW)
 string tradingPanelPosition = input.string("左中", "交易面板位置", options = ["左上", "左中", "左下", "右上", "右中", "右下"], group = GROUP_VIEW)
@@ -2542,7 +2543,8 @@ var array<label> structureLabels = array.new<label>()
 var array<box> structureBoxes = array.new<box>()
 var array<polyline> divergenceConnectors = array.new<polyline>()
 bool tradingView = viewPreset == "交易"
-int pointRenderBudget = tradingView ? 220 : viewPreset == "简洁" ? 120 : viewPreset == "标准" ? 300 : 260
+bool fullGeometry = renderDensity == "完整"
+int pointRenderBudget = fullGeometry ? (tradingView ? 220 : viewPreset == "简洁" ? 120 : viewPreset == "标准" ? 300 : 260) : tradingView ? 100 : viewPreset == "简洁" ? 60 : viewPreset == "标准" ? 120 : 140
 int totalPointHistory = array.size(pointsT0) + array.size(pointsT1) + array.size(pointsT2) + array.size(pointsT3)
 bool pointHistoryClipped = (showBuySellPoints or showEvidenceRanges) and totalPointHistory > pointRenderBudget
 
@@ -2570,7 +2572,7 @@ if barstate.islast
 
     int strokeCountForDraw = array.size(viewStrokes)
     if showStrokes and (viewPreset == "标准" or viewPreset == "研究") and strokeCountForDraw > 0
-        int strokeDrawBudget = viewPreset == "标准" ? 150 : 180
+        int strokeDrawBudget = fullGeometry ? (viewPreset == "标准" ? 150 : 180) : viewPreset == "标准" ? 90 : 120
         int firstStrokeToDraw = math.max(0, strokeCountForDraw - strokeDrawBudget)
         for i = firstStrokeToDraw to strokeCountForDraw - 1
             Unit stroke = array.get(viewStrokes, i)
@@ -2582,7 +2584,7 @@ if barstate.islast
 
     int l1CountForDraw = array.size(segmentsS)
     if showSegments and l1CountForDraw > 0
-        int l1DrawBudget = tradingView ? 18 : viewPreset == "简洁" ? 25 : viewPreset == "标准" ? 55 : 70
+        int l1DrawBudget = fullGeometry ? (tradingView ? 18 : viewPreset == "简洁" ? 25 : viewPreset == "标准" ? 55 : 70) : tradingView ? 14 : viewPreset == "简洁" ? 18 : viewPreset == "标准" ? 35 : 45
         int firstL1ToDraw = math.max(0, l1CountForDraw - l1DrawBudget)
         for i = firstL1ToDraw to l1CountForDraw - 1
             Unit segment = array.get(segmentsS, i)
@@ -2595,7 +2597,7 @@ if barstate.islast
     if showHigherSegments and (viewPreset == "研究" or tradingView)
         int l2CountForDraw = array.size(movementsT0)
         if l2CountForDraw > 0
-            int firstL2ToDraw = math.max(0, l2CountForDraw - (tradingView ? 6 : 24))
+            int firstL2ToDraw = math.max(0, l2CountForDraw - (fullGeometry ? (tradingView ? 6 : 24) : tradingView ? 5 : 18))
             for i = firstL2ToDraw to l2CountForDraw - 1
                 Unit segment = array.get(movementsT0, i)
                 if segment.endIndex >= bar_index - detailBars and (segment.confirmed or showCandidates)
@@ -2603,7 +2605,7 @@ if barstate.islast
                     array.push(structureLines, segmentLine)
         int l3CountForDraw = array.size(movementsT1)
         if not tradingView and l3CountForDraw > 0
-            int firstL3ToDraw = math.max(0, l3CountForDraw - 8)
+            int firstL3ToDraw = math.max(0, l3CountForDraw - (fullGeometry ? 8 : 6))
             for i = firstL3ToDraw to l3CountForDraw - 1
                 Unit segment = array.get(movementsT1, i)
                 if segment.endIndex >= bar_index - detailBars and (segment.confirmed or showCandidates)
@@ -2612,7 +2614,7 @@ if barstate.islast
 
     int fractalCountForDraw = array.size(baseFractals)
     if showFractals and viewPreset == "研究" and fractalCountForDraw > 0
-        int firstFractalToDraw = math.max(0, fractalCountForDraw - 50)
+        int firstFractalToDraw = math.max(0, fractalCountForDraw - (fullGeometry ? 50 : 30))
         for i = firstFractalToDraw to fractalCountForDraw - 1
             Fractal fractal = array.get(baseFractals, i)
             if fractal.structureIndex >= bar_index - detailBars
@@ -2620,17 +2622,17 @@ if barstate.islast
                 label fractalLabel = label.new(fractal.structureIndex, fractal.price, fractalText, xloc = xloc.bar_index, style = fractal.kind == 1 ? label.style_label_down : label.style_label_up, color = color.new(fractal.kind == 1 ? downColor : upColor, 72), textcolor = foregroundColor, size = size.tiny)
                 array.push(structureLabels, fractalLabel)
 
-    int l0CenterDraw = not showCenters ? 0 : tradingView ? 2 : viewPreset == "简洁" ? 1 : viewPreset == "标准" ? 25 : 30
-    int l1CenterDraw = not showCenters ? 0 : tradingView ? 2 : viewPreset == "简洁" ? 1 : viewPreset == "标准" ? 12 : 18
-    int l2CenterDraw = not showCenters ? 0 : tradingView ? 1 : viewPreset == "简洁" ? 1 : viewPreset == "标准" ? 4 : 8
-    int l3CenterDraw = not showCenters ? 0 : tradingView ? 0 : viewPreset == "简洁" ? 1 : viewPreset == "标准" ? 2 : 4
+    int l0CenterDraw = not showCenters ? 0 : fullGeometry ? (tradingView ? 2 : viewPreset == "简洁" ? 1 : viewPreset == "标准" ? 25 : 30) : tradingView ? 2 : viewPreset == "简洁" ? 1 : viewPreset == "标准" ? 16 : 20
+    int l1CenterDraw = not showCenters ? 0 : fullGeometry ? (tradingView ? 2 : viewPreset == "简洁" ? 1 : viewPreset == "标准" ? 12 : 18) : tradingView ? 2 : viewPreset == "简洁" ? 1 : viewPreset == "标准" ? 8 : 10
+    int l2CenterDraw = not showCenters ? 0 : fullGeometry ? (tradingView ? 1 : viewPreset == "简洁" ? 1 : viewPreset == "标准" ? 4 : 8) : tradingView ? 1 : viewPreset == "简洁" ? 1 : viewPreset == "标准" ? 3 : 4
+    int l3CenterDraw = not showCenters ? 0 : fullGeometry ? (tradingView ? 0 : viewPreset == "简洁" ? 1 : viewPreset == "标准" ? 2 : 4) : tradingView ? 0 : viewPreset == "简洁" ? 1 : viewPreset == "标准" ? 1 : 2
     bool showWaveCenters = viewPreset == "研究"
     f_draw_centers(centersT0, structureBoxes, structureLabels, foregroundColor, l0CenterDraw, detailBars, showWaveCenters)
     f_draw_centers(centersT1, structureBoxes, structureLabels, layer1Color, l1CenterDraw, detailBars, showWaveCenters)
     f_draw_centers(centersT2, structureBoxes, structureLabels, layer2Color, l2CenterDraw, detailBars, showWaveCenters)
     f_draw_centers(centersT3, structureBoxes, structureLabels, layer3Color, l3CenterDraw, detailBars, showWaveCenters)
 
-    int divergenceDraw = not showDivergences ? 0 : tradingView ? 4 : viewPreset == "简洁" ? 1 : viewPreset == "标准" ? 10 : 12
+    int divergenceDraw = not showDivergences ? 0 : fullGeometry ? (tradingView ? 4 : viewPreset == "简洁" ? 1 : viewPreset == "标准" ? 10 : 12) : tradingView ? 4 : viewPreset == "简洁" ? 1 : viewPreset == "标准" ? 6 : 8
     f_draw_divergences(segmentsS, divergencesT0, divergenceConnectors, structureLabels, foregroundColor, divergenceDraw, detailBars, tradingView, tradingView)
     f_draw_divergences(movementsT0, divergencesT1, divergenceConnectors, structureLabels, layer1Color, divergenceDraw, detailBars, tradingView, tradingView)
     f_draw_divergences(movementsT1, divergencesT2, divergenceConnectors, structureLabels, layer2Color, divergenceDraw, detailBars, tradingView, tradingView)
@@ -2716,7 +2718,7 @@ if barstate.islast
     f_panel_cell(statusPanel, 0, 26, "T1/T2/T3 点 1/2/3")
     f_panel_cell(statusPanel, 1, 26, f_point_triplet(pointsT1) + " | " + f_point_triplet(pointsT2) + " | " + f_point_triplet(pointsT3))
     f_panel_cell(statusPanel, 0, 27, "参考/窗口/递归")
-    f_panel_cell(statusPanel, 1, 27, str.tostring(activeReferenceCount) + "/4 · " + str.tostring(detailBars) + " K · T0-T3")
+    f_panel_cell(statusPanel, 1, 27, str.tostring(activeReferenceCount) + "/4 · " + str.tostring(detailBars) + " K · T0-T3 · " + renderDensity)
     f_panel_cell(statusPanel, 0, 28, "对象 线/框/标")
     f_panel_cell(statusPanel, 1, 28, str.tostring(array.size(structureLines)) + "/" + str.tostring(array.size(structureBoxes)) + "/" + str.tostring(array.size(structureLabels)))
     f_panel_cell(statusPanel, 0, 29, "活动结构 / 历史事件")

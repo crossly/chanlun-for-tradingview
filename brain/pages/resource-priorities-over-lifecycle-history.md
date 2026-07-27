@@ -5,7 +5,7 @@ category: decision
 status: active
 tags: [performance, rendering, lifecycle, free-plan]
 created: "2026-07-27T13:14:28"
-updated: "2026-07-27T20:26:43"
+updated: "2026-07-27T20:40:13"
 ---
 
 ## compiled_truth
@@ -98,4 +98,10 @@ TradingView 的编译 token、历史执行时间、实时 tick 时间、内存�
   kind: reversal
   summary: "撤回跨 tick 绘图投影脏键。Pine 在实时柱每次重算前 rollback 临时绘图对象，而 varip previousDrawingStateKey 逃逸 rollback，导致下一 tick 跳过重画并让线条一闪即逝。恢复每次 barstate.islast 执行重画；后续性能优化必须使用可持续对象池并在每 tick 重放 setter，不能用 varip 跳过绘图。"
   source: "2026-07-27 用户图表运行报告与 TradingView Pine 官方执行模型"
+  affects: [resource-priorities-over-lifecycle-history, current-pine-observable-baseline]
+
+- time: 2026-07-27T20:40:13
+  kind: evidence
+  summary: "新增默认快速、可选完整的绘图密度。快速标准预设把理论对象上界由约 480 line/388 label/43 box/40 polyline 降至 255/177/28/24，约减少 49% 对象创建；只裁剪旧几何，不改变计算、结构、证据、提醒和事件身份。官方 Pine 编译无 errors，实际图表加载耗时待用户复验。"
+  source: "2026-07-27 绘图预算模型、本地 34 项契约与 TradingView 官方编译"
   affects: [resource-priorities-over-lifecycle-history, current-pine-observable-baseline]
