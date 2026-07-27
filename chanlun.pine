@@ -2478,6 +2478,8 @@ color candidateColor = color.rgb(245, 166, 35)
 color layer1Color = color.rgb(33, 150, 243)
 color layer2Color = color.rgb(255, 193, 7)
 color layer3Color = color.rgb(156, 39, 176)
+color panelBackgroundColor = color.new(backgroundColor, 5)
+color panelHeaderBackgroundColor = color.new(foregroundColor, 82)
 
 f_center_summary(array<Center> centers) =>
     string result = "0"
@@ -2921,15 +2923,16 @@ if barstate.islast
     f_draw_scenarios(activeScenarios, structureLines, structureLabels)
 
 f_panel_cell(table panel, int column, int row, string cellText, color text_color, color bgcolor = na, string tooltip = "") =>
-    table.cell(panel, column, row, cellText, text_color = text_color, bgcolor = bgcolor, text_size = size.tiny, tooltip = tooltip)
+    color cellBackgroundColor = na(bgcolor) ? panelBackgroundColor : bgcolor
+    table.cell(panel, column, row, cellText, text_color = foregroundColor, bgcolor = cellBackgroundColor, text_size = size.tiny, tooltip = tooltip)
 
 var table statusPanel = table.new(position.top_right, 2, 42, border_width = 1)
 
 if barstate.islast
     string panelPosition = not tradingView ? position.top_right : tradingPanelPosition == "左上" ? position.top_left : tradingPanelPosition == "左中" ? position.middle_left : tradingPanelPosition == "左下" ? position.bottom_left : tradingPanelPosition == "右上" ? position.top_right : tradingPanelPosition == "右中" ? position.middle_right : position.bottom_right
     table.set_position(statusPanel, panelPosition)
-    f_panel_cell(statusPanel, 0, 0, "严格递归缠论", bgcolor = color.new(foregroundColor, 85), text_color = foregroundColor)
-    f_panel_cell(statusPanel, 1, 0, "Pine v6", bgcolor = color.new(foregroundColor, 85), text_color = foregroundColor)
+    f_panel_cell(statusPanel, 0, 0, "严格递归缠论", bgcolor = panelHeaderBackgroundColor, text_color = foregroundColor)
+    f_panel_cell(statusPanel, 1, 0, "Pine v6", bgcolor = panelHeaderBackgroundColor, text_color = foregroundColor)
     f_panel_cell(statusPanel, 0, 1, "焦点周期", text_color = foregroundColor)
     f_panel_cell(statusPanel, 1, 1, timeframe.period, text_color = foregroundColor)
     f_panel_cell(statusPanel, 0, 2, "图表", text_color = foregroundColor)
