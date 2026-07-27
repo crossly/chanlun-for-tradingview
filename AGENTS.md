@@ -2,12 +2,8 @@
 
 ### Issue tracker
 
-Issues and specs live as local Markdown under `.scratch/`. See `docs/agents/issue-tracker.md`.
+Issues and specs live as local Markdown under `.scratch/`.
 
-### Triage labels
+### Domain model
 
-Use the canonical triage labels. See `docs/agents/triage-labels.md`.
-
-### Domain docs
-
-This is a single-context repo using root `CONTEXT.md` and `docs/adr/`. See `docs/agents/domain.md`.
+This is a single-context repo using root `CONTEXT.md`.

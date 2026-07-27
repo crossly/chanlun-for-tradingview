@@ -37,6 +37,39 @@ class CourseV2ContractTest(unittest.TestCase):
         self.assertNotIn("rawRangeHigh", SOURCE)
         self.assertNotIn("rawRangeLow", SOURCE)
 
+    def test_inclusion_cluster_extrema_anchor_fractal_endpoints(self) -> None:
+        for field in (
+            "clusterHigh",
+            "clusterLow",
+            "clusterHighIndex",
+            "clusterLowIndex",
+            "clusterHighTime",
+            "clusterLowTime",
+        ):
+            self.assertRegex(SOURCE, rf"\b{field}\b")
+
+        self.assertIn("if rawHigh >= lastBar.clusterHigh", SOURCE)
+        self.assertIn("lastBar.clusterHigh := rawHigh", SOURCE)
+        self.assertIn("if rawLow <= lastBar.clusterLow", SOURCE)
+        self.assertIn("lastBar.clusterLow := rawLow", SOURCE)
+        self.assertIn(
+            "Fractal.new(1, middlePosition, middleBar.clusterHighIndex, "
+            "middleBar.clusterHighTime, confirmationTime, middleBar.clusterHigh)",
+            SOURCE,
+        )
+        self.assertIn(
+            "Fractal.new(-1, middlePosition, middleBar.clusterLowIndex, "
+            "middleBar.clusterLowTime, confirmationTime, middleBar.clusterLow)",
+            SOURCE,
+        )
+
+    def test_all_structure_lines_inherit_extreme_fractal_endpoints(self) -> None:
+        self.assertIn("lastEndpoint.price, newFractal.price", SOURCE)
+        self.assertIn("startUnit.startPrice, boundary.startPrice", SOURCE)
+        self.assertIn("first.startPrice, last.endPrice", SOURCE)
+        self.assertIn("line.new(stroke.startTime, stroke.startPrice, stroke.endTime, stroke.endPrice", SOURCE)
+        self.assertIn("line.new(segment.startTime, segment.startPrice, segment.endTime, segment.endPrice", SOURCE)
+
     def test_intrabar_opposite_fractal_creates_candidate_without_freezing_prefix(self) -> None:
         stroke_builder = re.search(
             r"f_update_strokes\(.*?\) =>(?P<body>.*?)\n\nf_extend_terminal_candidate",
@@ -55,7 +88,8 @@ class CourseV2ContractTest(unittest.TestCase):
 
     def test_segments_keep_full_child_range(self) -> None:
         self.assertIn(
-            "[segmentHigh, segmentLow, segmentDifHigh, segmentDifLow] = "
+            "[segmentHigh, segmentLow, segmentHighIndex, segmentLowIndex, "
+            "segmentHighTime, segmentLowTime, segmentDifHigh, segmentDifLow] = "
             "f_children_stats(lowerUnits, startChild, endpointChild - 1)",
             SOURCE,
         )
@@ -404,13 +438,10 @@ class CourseV2ContractTest(unittest.TestCase):
         self.assertIsNotNone(divergence_drawer)
         body = divergence_drawer.group("body")
         self.assertIn("Unit entering = array.get(units, current.enteringUnit)", body)
-        self.assertIn("Unit leaving = array.get(units, current.leavingUnit)", body)
+        self.assertIn("f_unit_high_time(entering) : f_unit_low_time(entering)", body)
+        self.assertIn("f_unit_high(entering) : f_unit_low(entering)", body)
         self.assertIn(
-            "chart.point.from_time(entering.endTime, entering.endPrice)",
-            body,
-        )
-        self.assertIn(
-            "chart.point.from_time(leaving.endTime, leaving.endPrice)",
+            "chart.point.from_time(current.structureTime, current.structurePrice)",
             body,
         )
         self.assertIn("polyline.new(comparisonPoints", body)
@@ -452,6 +483,81 @@ class CourseV2ContractTest(unittest.TestCase):
         self.assertIn('"\\n离开候选: "', SOURCE)
         self.assertIn('"\\n离开失败: "', SOURCE)
         self.assertIn("+ departureText + promotionText", SOURCE)
+
+
+    def test_completed_movement_survives_source_divergence_expiry(self) -> None:
+        builder = re.search(
+            r"f_build_completed_movements\(.*?\) =>(?P<body>.*?)\n\nf_get_trend_state",
+            SOURCE,
+            flags=re.DOTALL,
+        )
+        self.assertIsNotNone(builder)
+        body = builder.group("body")
+        self.assertIn("if divergence.confirmed and divergence.centerIndex", body)
+        self.assertNotIn("divergence.confirmed and divergence.valid", body)
+        self.assertIn("latestCompleted.lastChild == latest.leavingUnit", SOURCE)
+        self.assertIn("movement.lastChild == divergence.leavingUnit", SOURCE)
+        self.assertIn("if current.valid or pointConfirmed", SOURCE)
+
+    def test_trend_divergence_anchors_the_qualifying_range_extreme(self) -> None:
+        for field in (
+            "rangeHighIndex",
+            "rangeLowIndex",
+            "rangeHighTime",
+            "rangeLowTime",
+        ):
+            self.assertRegex(SOURCE, rf"\b{field}\b")
+        self.assertIn("float structurePrice = departureDirection == 1 ? f_unit_high(leaving) : f_unit_low(leaving)", SOURCE)
+        self.assertIn("int structureIndex = departureDirection == 1 ? f_unit_high_index(leaving) : f_unit_low_index(leaving)", SOURCE)
+        self.assertIn("int structureTime = departureDirection == 1 ? f_unit_high_time(leaving) : f_unit_low_time(leaving)", SOURCE)
+        self.assertIn("float confirmationPrice = divergenceConfirmed ? structurePrice : na", SOURCE)
+
+    def test_mixed_confirmation_evidence_forms_candidate_resonance(self) -> None:
+        builder = re.search(
+            r"f_build_resonances\(.*?\) =>(?P<body>.*?)\n\nf_build_nesting",
+            SOURCE,
+            flags=re.DOTALL,
+        )
+        self.assertIsNotNone(builder)
+        body = builder.group("body")
+        self.assertIn("bool includeStatus = requiredConfirmed ? evidence.confirmed : true", body)
+        self.assertIn("bool hasCandidate = false", body)
+        self.assertIn("hasCandidate := hasCandidate or not evidence.confirmed", body)
+        self.assertIn("identityCount >= 2 and (requiredConfirmed or hasCandidate)", body)
+
+    def test_nesting_uses_source_unit_time_and_true_range(self) -> None:
+        for field in ("structureEndTime", "structureRangeHigh", "structureRangeLow"):
+            self.assertRegex(SOURCE, rf"\b{field}\b")
+        builder = re.search(
+            r"f_build_nesting\(.*?\) =>(?P<body>.*?)\n\nf_previous_scenario_known",
+            SOURCE,
+            flags=re.DOTALL,
+        )
+        self.assertIsNotNone(builder)
+        body = builder.group("body")
+        self.assertIn("int parentEndTime = root.structureEndTime", body)
+        self.assertIn("float parentLow = root.structureRangeLow", body)
+        self.assertIn("float parentHigh = root.structureRangeHigh", body)
+        self.assertIn("float childLow = evidence.structureRangeLow", body)
+        self.assertIn("float childHigh = evidence.structureRangeHigh", body)
+
+    def test_execution_keeps_actionable_point_ahead_of_newer_context(self) -> None:
+        builder = re.search(
+            r"f_build_execution_state\(.*?\) =>(?P<body>.*?)\n\nf_execution_status_summary",
+            SOURCE,
+            flags=re.DOTALL,
+        )
+        self.assertIsNotNone(builder)
+        body = builder.group("body")
+        self.assertIn("int latestContextIndex = na", body)
+        self.assertIn("int latestActionableIndex = na", body)
+        self.assertIn("bool actionable = evidence.confirmed and evidence.kind >= 11 and not evidence.invalidationCandidate", body)
+        self.assertIn("primaryIndex := na(latestActionableIndex) ? latestContextIndex : latestActionableIndex", body)
+        self.assertRegex(SOURCE, r"\bcontextEvidenceIndex\b")
+
+    def test_failed_departure_scenario_describes_return_to_core(self) -> None:
+        self.assertIn('"离开后重新进入中枢核心区"', SOURCE)
+        self.assertNotIn('"当前离开未越过中枢核心区"', SOURCE)
 
 
 
