@@ -1,8 +1,4 @@
 //@version=6
-// [INPUT]: 依赖 TradingView 标准 OHLC、已收盘参考周期数据与 Pine v6 绘图/提醒能力
-// [OUTPUT]: 提供 course-v2 缠论结构、证据、交易状态、可视化与 JSON 提醒
-// [POS]: 项目唯一运行交付物，串联合成 K、分型、笔、线段、走势递归及展示集成
-// [PROTOCOL]: 变更时更新此头部，然后检查 GEMINI.md
 // SPDX-License-Identifier: AGPL-3.0-only
 // Strict recursive Chanlun indicator for TradingView.
 
@@ -232,6 +228,7 @@ type BuySellPoint
     float structurePrice
     float confirmationPrice
     int confirmationDelayBars
+    bool reliable
     bool confirmed
     bool valid
     bool invalidationCandidate
@@ -248,6 +245,7 @@ type Evidence
     int kind
     int direction
     bool confirmed
+    bool reliable
     bool invalidationCandidate
     int sourceIndex
     int structureStartTime
@@ -286,6 +284,7 @@ type Resonance
     int conflictCount
     int startTime
     int knownTime
+    int evidenceEndTime
     string componentIds
     string componentText
     string eventId
@@ -300,6 +299,7 @@ type NestingState
     int startTime
     int endTime
     int knownTime
+    int evidenceEndTime
     float price
     string componentIds
     string componentText
@@ -329,6 +329,7 @@ type ReferenceState
     int lastSourceTime
     int nextIndex
     int lastKnownTime
+    int reliableStartTime
     bool structuresDirty
 
 type ReferenceEngine
@@ -385,7 +386,7 @@ f_tail_isolated_units(array<Unit> source) =>
 
 
 f_new_reference_engine() =>
-    ReferenceEngine.new(ReferenceState.new(false, 0, na, na, na, 0, na, false), array.new<KBar>(), array.new<Fractal>(), array.new<Unit>(), array.new<Unit>(), array.new<Unit>(), array.new<Unit>(), array.new<Unit>(), array.new<float>(), array.new<float>(), array.new<int>(), array.new<int>(), array.new<float>(), array.new<float>(), array.new<float>(), array.new<Center>(), array.new<Center>(), array.new<Center>(), array.new<Divergence>(), array.new<Divergence>(), array.new<Divergence>(), array.new<BuySellPoint>(), array.new<BuySellPoint>(), array.new<BuySellPoint>(), na, na, na)
+    ReferenceEngine.new(ReferenceState.new(false, 0, na, na, na, 0, na, na, false), array.new<KBar>(), array.new<Fractal>(), array.new<Unit>(), array.new<Unit>(), array.new<Unit>(), array.new<Unit>(), array.new<Unit>(), array.new<float>(), array.new<float>(), array.new<int>(), array.new<int>(), array.new<float>(), array.new<float>(), array.new<float>(), array.new<Center>(), array.new<Center>(), array.new<Center>(), array.new<Divergence>(), array.new<Divergence>(), array.new<Divergence>(), array.new<BuySellPoint>(), array.new<BuySellPoint>(), array.new<BuySellPoint>(), na, na, na)
 
 f_next_reference_seconds(int seconds) =>
     seconds < 60 ? 60 : seconds < 300 ? 300 : seconds < 900 ? 900 : seconds < 3600 ? 3600 : seconds < 14400 ? 14400 : seconds < 86400 ? 86400 : seconds < 604800 ? 604800 : seconds < 2592000 ? 2592000 : seconds < 7776000 ? 7776000 : seconds < 31536000 ? 31536000 : 0
@@ -1291,7 +1292,7 @@ f_build_points(array<Unit> units, array<Center> centers, array<Divergence> diver
                         pointConfirmationTime := sourceCenter.promotionConfirmationTime
                         pointConfirmationPrice := sourceCenter.promotionConfirmationPrice
                     int firstKnownTime = f_previous_point_known(previousPoints, layer, 1, pointDirection, current.structureTime)
-                    array.push(points, BuySellPoint.new(layer, 1, pointDirection, layer, divergenceIndex, current.centerIndex, na, 0, current.leavingUnit, proofIndex, current.structureIndex, current.structureTime, pointConfirmationTime, firstKnownTime, current.structurePrice, pointConfirmationPrice, delayBars, pointConfirmed, true, false, current.structurePrice, evidenceStartIndex, evidenceStartTime, na, na))
+                    array.push(points, BuySellPoint.new(layer, 1, pointDirection, layer, divergenceIndex, current.centerIndex, na, 0, current.leavingUnit, proofIndex, current.structureIndex, current.structureTime, pointConfirmationTime, firstKnownTime, current.structurePrice, pointConfirmationPrice, delayBars, true, pointConfirmed, true, false, current.structurePrice, evidenceStartIndex, evidenceStartTime, na, na))
 
     int firstPointCount = array.size(points)
     if firstPointCount > 0
@@ -1316,7 +1317,7 @@ f_build_points(array<Unit> units, array<Center> centers, array<Divergence> diver
                         float relativePrice = pullback.endPrice
                         int relativePosition = relativePrice == firstPoint.structurePrice ? 0 : firstPoint.direction == 1 ? (relativePrice > firstPoint.structurePrice ? 1 : -1) : (relativePrice < firstPoint.structurePrice ? 1 : -1)
                         int firstKnownTime = f_previous_point_known(previousPoints, layer, 2, firstPoint.direction, pullback.endTime)
-                        array.push(points, BuySellPoint.new(layer, 2, firstPoint.direction, layer, firstPoint.sourceDivergence, firstPoint.sourceCenter, firstPointIndex, relativePosition, pullbackIndex, pullbackIndex, pullback.endIndex, pullback.endTime, pointConfirmationTime, firstKnownTime, pullback.endPrice, pointConfirmationPrice, delayBars, pointConfirmed, true, false, pullback.endPrice, evidenceStartIndex, evidenceStartTime, na, na))
+                        array.push(points, BuySellPoint.new(layer, 2, firstPoint.direction, layer, firstPoint.sourceDivergence, firstPoint.sourceCenter, firstPointIndex, relativePosition, pullbackIndex, pullbackIndex, pullback.endIndex, pullback.endTime, pointConfirmationTime, firstKnownTime, pullback.endPrice, pointConfirmationPrice, delayBars, firstPoint.reliable, pointConfirmed, true, false, pullback.endPrice, evidenceStartIndex, evidenceStartTime, na, na))
 
     int lowerPointCount = array.size(lowerPoints)
     if layer > 0 and lowerPointCount > 0
@@ -1350,7 +1351,7 @@ f_build_points(array<Unit> units, array<Center> centers, array<Divergence> diver
                         int delayBars = pointConfirmed ? math.max(0, pullback.endIndex - lowerFirst.structureIndex) : na
                         int relativePosition = pullback.endPrice == lowerFirst.structurePrice ? 0 : lowerFirst.direction == 1 ? (pullback.endPrice > lowerFirst.structurePrice ? 1 : -1) : (pullback.endPrice < lowerFirst.structurePrice ? 1 : -1)
                         int firstKnownTime = f_previous_point_known(previousPoints, layer, 2, lowerFirst.direction, pullback.endTime)
-                        array.push(points, BuySellPoint.new(layer, 2, lowerFirst.direction, lowerFirst.layer, lowerFirst.sourceDivergence, lowerFirst.sourceCenter, lowerPointIndex, relativePosition, pullbackIndex, pullbackIndex, pullback.endIndex, pullback.endTime, pointConfirmationTime, firstKnownTime, pullback.endPrice, pointConfirmationPrice, delayBars, pointConfirmed, true, false, pullback.endPrice, pullback.endIndex, pointConfirmed ? pointConfirmationTime : pullback.endTime, na, na))
+                        array.push(points, BuySellPoint.new(layer, 2, lowerFirst.direction, lowerFirst.layer, lowerFirst.sourceDivergence, lowerFirst.sourceCenter, lowerPointIndex, relativePosition, pullbackIndex, pullbackIndex, pullback.endIndex, pullback.endTime, pointConfirmationTime, firstKnownTime, pullback.endPrice, pointConfirmationPrice, delayBars, lowerFirst.reliable, pointConfirmed, true, false, pullback.endPrice, pullback.endIndex, pointConfirmed ? pointConfirmationTime : pullback.endTime, na, na))
 
     int centerCount = array.size(centers)
     if centerCount > 0
@@ -1360,6 +1361,8 @@ f_build_points(array<Unit> units, array<Center> centers, array<Divergence> diver
                 Unit retest = array.get(units, currentCenter.retestChild)
                 bool outsideCore = currentCenter.leaveDirection == 1 ? f_unit_low(retest) >= currentCenter.zg : f_unit_high(retest) <= currentCenter.zd
                 if outsideCore
+                    Unit sourceFirst = array.get(units, currentCenter.startChild)
+                    bool sourceReliable = sourceFirst.startIndex >= MACD_WARMUP_BARS
                     bool pointConfirmed = currentCenter.leaveState == 2 and retest.confirmed
                     int pointConfirmationTime = pointConfirmed ? f_unit_confirmation_time(retest) : na
                     float pointConfirmationPrice = pointConfirmed ? retest.endPrice : na
@@ -1368,7 +1371,7 @@ f_build_points(array<Unit> units, array<Center> centers, array<Divergence> diver
                     int delayBars = pointConfirmed ? math.max(0, retest.endIndex - array.get(units, currentCenter.leaveChild).startIndex) : na
                     float invalidationPrice = currentCenter.leaveDirection == 1 ? currentCenter.zg : currentCenter.zd
                     int firstKnownTime = f_previous_point_known(previousPoints, layer, 3, currentCenter.leaveDirection, retest.endTime)
-                    array.push(points, BuySellPoint.new(layer, 3, currentCenter.leaveDirection, layer, na, centerIndex, na, 0, currentCenter.retestChild, currentCenter.retestChild, retest.endIndex, retest.endTime, pointConfirmationTime, firstKnownTime, retest.endPrice, pointConfirmationPrice, delayBars, pointConfirmed, true, false, invalidationPrice, evidenceStartIndex, evidenceStartTime, na, na))
+                    array.push(points, BuySellPoint.new(layer, 3, currentCenter.leaveDirection, layer, na, centerIndex, na, 0, currentCenter.retestChild, currentCenter.retestChild, retest.endIndex, retest.endTime, pointConfirmationTime, firstKnownTime, retest.endPrice, pointConfirmationPrice, delayBars, sourceReliable, pointConfirmed, true, false, invalidationPrice, evidenceStartIndex, evidenceStartTime, na, na))
 
     int pointCount = array.size(points)
     if pointCount > 0
@@ -1420,6 +1423,9 @@ f_evidence_short(Evidence evidence) =>
     string kindText = evidence.kind == 1 ? "盘背" : evidence.kind == 2 ? "趋背" : evidence.kind == 11 ? "1点" : evidence.kind == 12 ? "2点" : "3点"
     evidence.marketTimeframe + "·T" + str.tostring(evidence.layer) + "·" + kindText
 
+f_market_reliable(int marketId, int knownTime, int reliableStartTime) =>
+    not na(reliableStartTime) and not na(knownTime) and knownTime >= reliableStartTime
+
 
 
 f_upsert_evidence(array<Evidence> ledger, Evidence incoming) =>
@@ -1442,7 +1448,7 @@ f_upsert_evidence(array<Evidence> ledger, Evidence incoming) =>
         if incoming.evidenceStartTime >= current.evidenceStartTime
             array.set(ledger, replaceIndex, incoming)
 
-f_collect_layer_evidence(array<Evidence> activeLedger, array<Evidence> transitionLedger, int marketId, string marketTimeframe, array<Unit> units, array<Divergence> divergences, array<BuySellPoint> points) =>
+f_collect_layer_evidence(array<Evidence> activeLedger, array<Evidence> transitionLedger, int marketId, string marketTimeframe, int marketReliableStartTime, array<Unit> units, array<Divergence> divergences, array<BuySellPoint> points) =>
     int divergenceCount = array.size(divergences)
     if divergenceCount > 0
         for divergenceIndex = 0 to divergenceCount - 1
@@ -1451,7 +1457,7 @@ f_collect_layer_evidence(array<Evidence> activeLedger, array<Evidence> transitio
             bool invalidatedNow = current.confirmed and not current.valid and not na(current.evidenceEndTime) and current.evidenceEndTime >= time
             if active or invalidatedNow
                 int evidenceDirection = -current.direction
-                int knownTime = invalidatedNow ? current.evidenceEndTime : current.confirmed ? current.confirmationTime : current.firstKnownTime
+                int knownTime = invalidatedNow ? current.evidenceEndTime : current.invalidationCandidate ? time : current.confirmed ? current.confirmationTime : current.firstKnownTime
                 float structureStartPrice = current.structurePrice
                 int structureEndTime = current.structureTime
                 float structureRangeHigh = current.structurePrice
@@ -1465,7 +1471,8 @@ f_collect_layer_evidence(array<Evidence> activeLedger, array<Evidence> transitio
                 string eventType = current.kind == 2 ? "trend_divergence" : "consolidation_divergence"
                 string eventId = f_event_id(marketTimeframe, current.layer, eventType, evidenceDirection, current.structureTime)
                 string movementContext = f_movement_context_id(marketTimeframe, current.layer, current.parentStartTime)
-                Evidence evidence = Evidence.new(marketId, marketTimeframe, current.layer, current.kind, evidenceDirection, current.confirmed, current.invalidationCandidate, current.centerIndex, current.parentStartTime, current.structureTime, structureEndTime, current.confirmationTime, knownTime, current.evidenceStartTime, current.evidenceEndTime, current.structurePrice, structureStartPrice, structureRangeHigh, structureRangeLow, current.confirmationPrice, current.invalidationPrice, movementContext, eventId)
+                bool evidenceReliable = f_market_reliable(marketId, knownTime, marketReliableStartTime)
+                Evidence evidence = Evidence.new(marketId, marketTimeframe, current.layer, current.kind, evidenceDirection, current.confirmed, evidenceReliable, current.invalidationCandidate, current.centerIndex, current.parentStartTime, current.structureTime, structureEndTime, current.confirmationTime, knownTime, current.evidenceStartTime, current.evidenceEndTime, current.structurePrice, structureStartPrice, structureRangeHigh, structureRangeLow, current.confirmationPrice, current.invalidationPrice, movementContext, eventId)
                 if active
                     f_upsert_evidence(activeLedger, evidence)
                 else
@@ -1490,11 +1497,12 @@ f_collect_layer_evidence(array<Evidence> activeLedger, array<Evidence> transitio
                     structureStartPrice := sourceUnit.startPrice
                     structureRangeHigh := f_unit_high(sourceUnit)
                     structureRangeLow := f_unit_low(sourceUnit)
-                int knownTime = invalidatedNow ? current.evidenceEndTime : current.confirmed ? current.confirmationTime : current.firstKnownTime
+                int knownTime = invalidatedNow ? current.evidenceEndTime : current.invalidationCandidate ? time : current.confirmed ? current.confirmationTime : current.firstKnownTime
                 string eventType = "point_" + str.tostring(current.pointClass)
                 string eventId = f_event_id(marketTimeframe, current.layer, eventType, current.direction, current.structureTime)
                 string movementContext = f_movement_context_id(marketTimeframe, current.layer, intervalStartTime)
-                Evidence evidence = Evidence.new(marketId, marketTimeframe, current.layer, 10 + current.pointClass, current.direction, current.confirmed, current.invalidationCandidate, current.sourceCenter, intervalStartTime, current.structureTime, structureEndTime, current.confirmationTime, knownTime, current.evidenceStartTime, current.evidenceEndTime, current.structurePrice, structureStartPrice, structureRangeHigh, structureRangeLow, current.confirmationPrice, current.invalidationPrice, movementContext, eventId)
+                bool evidenceReliable = current.reliable and f_market_reliable(marketId, knownTime, marketReliableStartTime)
+                Evidence evidence = Evidence.new(marketId, marketTimeframe, current.layer, 10 + current.pointClass, current.direction, current.confirmed, evidenceReliable, current.invalidationCandidate, current.sourceCenter, intervalStartTime, current.structureTime, structureEndTime, current.confirmationTime, knownTime, current.evidenceStartTime, current.evidenceEndTime, current.structurePrice, structureStartPrice, structureRangeHigh, structureRangeLow, current.confirmationPrice, current.invalidationPrice, movementContext, eventId)
                 if active
                     f_upsert_evidence(activeLedger, evidence)
                 else
@@ -1513,7 +1521,7 @@ f_collect_nesting_evidence(array<Evidence> ledger, string marketTimeframe, array
                 string eventType = current.kind == 2 ? "trend_divergence" : "consolidation_divergence"
                 string eventId = f_event_id(marketTimeframe, current.layer, eventType, evidenceDirection, current.structureTime)
                 string movementContext = f_movement_context_id(marketTimeframe, current.layer, current.parentStartTime)
-                array.push(ledger, Evidence.new(0, marketTimeframe, current.layer, current.kind, evidenceDirection, current.confirmed, current.invalidationCandidate, current.centerIndex, leaving.startTime, current.structureTime, leaving.endTime, current.confirmationTime, knownTime, current.evidenceStartTime, current.evidenceEndTime, current.structurePrice, leaving.startPrice, f_unit_high(leaving), f_unit_low(leaving), current.confirmationPrice, current.invalidationPrice, movementContext, eventId))
+                array.push(ledger, Evidence.new(0, marketTimeframe, current.layer, current.kind, evidenceDirection, current.confirmed, true, current.invalidationCandidate, current.centerIndex, leaving.startTime, current.structureTime, leaving.endTime, current.confirmationTime, knownTime, current.evidenceStartTime, current.evidenceEndTime, current.structurePrice, leaving.startPrice, f_unit_high(leaving), f_unit_low(leaving), current.confirmationPrice, current.invalidationPrice, movementContext, eventId))
 
 f_build_resonances(array<Evidence> ledger, array<Resonance> resonances) =>
     array.clear(resonances)
@@ -1538,7 +1546,7 @@ f_build_resonances(array<Evidence> ledger, array<Resonance> resonances) =>
                     bool seenL3 = false
                     for evidenceIndex = 0 to ledgerCount - 1
                         Evidence evidence = array.get(ledger, evidenceIndex)
-                        bool includeStatus = requiredConfirmed ? evidence.confirmed : true
+                        bool includeStatus = evidence.reliable and (requiredConfirmed ? evidence.confirmed : true)
                         bool sameMarket = evidence.market == marketId
                         if includeStatus and sameMarket and evidence.direction == requiredDirection
                             evidenceCount += 1
@@ -1563,7 +1571,7 @@ f_build_resonances(array<Evidence> ledger, array<Resonance> resonances) =>
                             conflictCount += 1
                     if identityCount >= 2 and (requiredConfirmed or hasCandidate)
                         string eventId = f_event_prefix("resonance") + "|layer|" + str.tostring(marketId) + "|" + str.tostring(requiredDirection) + "|components=" + componentIds
-                        array.push(resonances, Resonance.new(1, marketId, requiredDirection, requiredConfirmed, evidenceCount, identityCount, conflictCount, startTime, knownTime, componentIds, componentText, eventId))
+                        array.push(resonances, Resonance.new(1, marketId, requiredDirection, requiredConfirmed, evidenceCount, identityCount, conflictCount, startTime, knownTime, na, componentIds, componentText, eventId))
 
                 int crossEvidenceCount = 0
                 int crossIdentityCount = 0
@@ -1580,7 +1588,7 @@ f_build_resonances(array<Evidence> ledger, array<Resonance> resonances) =>
                 bool seenMarket4 = false
                 for evidenceIndex = 0 to ledgerCount - 1
                     Evidence evidence = array.get(ledger, evidenceIndex)
-                    bool includeStatus = requiredConfirmed ? evidence.confirmed : true
+                    bool includeStatus = evidence.reliable and (requiredConfirmed ? evidence.confirmed : true)
                     if includeStatus and evidence.direction == requiredDirection
                         crossEvidenceCount += 1
                         crossHasCandidate := crossHasCandidate or not evidence.confirmed
@@ -1607,10 +1615,54 @@ f_build_resonances(array<Evidence> ledger, array<Resonance> resonances) =>
                         crossConflictCount += 1
                 if crossIdentityCount >= 2 and (requiredConfirmed or crossHasCandidate)
                     string eventId = f_event_prefix("resonance") + "|timeframe|" + str.tostring(requiredDirection) + "|components=" + crossComponentIds
-                    array.push(resonances, Resonance.new(2, -1, requiredDirection, requiredConfirmed, crossEvidenceCount, crossIdentityCount, crossConflictCount, crossStartTime, crossKnownTime, crossComponentIds, crossComponentText, eventId))
+                    array.push(resonances, Resonance.new(2, -1, requiredDirection, requiredConfirmed, crossEvidenceCount, crossIdentityCount, crossConflictCount, crossStartTime, crossKnownTime, na, crossComponentIds, crossComponentText, eventId))
+
+f_resonance_exists(array<Resonance> resonances, string eventId) =>
+    bool found = false
+    int resonanceCount = array.size(resonances)
+    if resonanceCount > 0
+        for resonanceIndex = 0 to resonanceCount - 1
+            if array.get(resonances, resonanceIndex).eventId == eventId
+                found := true
+                break
+    found
+
+f_composite_transition_time(string componentIds, array<Evidence> transitions) =>
+    int result = na
+    string delimitedComponents = "," + componentIds + ","
+    int transitionCount = array.size(transitions)
+    if transitionCount > 0
+        for transitionIndex = 0 to transitionCount - 1
+            Evidence transition = array.get(transitions, transitionIndex)
+            bool belongsToComposite = str.contains(delimitedComponents, "," + transition.eventId + ",")
+            if belongsToComposite and not na(transition.knownTime)
+                result := na(result) ? transition.knownTime : math.max(result, transition.knownTime)
+    result
+
+f_build_resonance_transitions(array<Resonance> previous, array<Resonance> current, array<Evidence> evidenceTransitions, array<Resonance> transitions) =>
+    array.clear(transitions)
+    int previousCount = array.size(previous)
+    if previousCount > 0
+        for previousIndex = 0 to previousCount - 1
+            Resonance old = array.get(previous, previousIndex)
+            if old.confirmed and not f_resonance_exists(current, old.eventId)
+                int transitionTime = f_composite_transition_time(old.componentIds, evidenceTransitions)
+                if not na(transitionTime)
+                    array.push(transitions, Resonance.new(old.scope, old.market, old.direction, old.confirmed, old.evidenceCount, old.identityCount, old.conflictCount, old.startTime, old.knownTime, transitionTime, old.componentIds, old.componentText, old.eventId))
+
+f_build_nesting_transition(NestingState previous, NestingState current, array<Evidence> evidenceTransitions) =>
+    NestingState transition = na
+    bool previousConfirmed = not na(previous) and previous.active and previous.confirmed
+    bool identityEnded = previousConfirmed and (na(current) or not current.active or current.eventId != previous.eventId)
+    if identityEnded
+        int transitionTime = f_composite_transition_time(previous.componentIds, evidenceTransitions)
+        transitionTime := na(transitionTime) and not na(current) and current.active ? current.knownTime : transitionTime
+        if not na(transitionTime)
+            transition := NestingState.new(false, previous.direction, true, previous.partial, previous.rootLayer, previous.depth, previous.startTime, previous.endTime, previous.knownTime, transitionTime, previous.price, previous.componentIds, previous.componentText, previous.eventId)
+    transition
 
 f_build_nesting(array<Evidence> ledger) =>
-    NestingState result = NestingState.new(false, 0, false, true, 0, 0, na, na, na, na, "", "", "")
+    NestingState result = NestingState.new(false, 0, false, true, 0, 0, na, na, na, na, na, "", "", "")
     int rootIndex = na
     int rootLayer = -1
     int latestRootTime = na
@@ -1619,7 +1671,7 @@ f_build_nesting(array<Evidence> ledger) =>
         for evidenceIndex = 0 to ledgerCount - 1
             Evidence evidence = array.get(ledger, evidenceIndex)
             bool divergenceEvidence = evidence.kind == 1 or evidence.kind == 2
-            bool eligibleRoot = evidence.market == 0 and divergenceEvidence and evidence.layer >= 1 and not na(evidence.structureStartTime)
+            bool eligibleRoot = evidence.reliable and evidence.market == 0 and divergenceEvidence and evidence.layer >= 1 and not na(evidence.structureStartTime)
             if eligibleRoot and (evidence.layer > rootLayer or (evidence.layer == rootLayer and (na(latestRootTime) or evidence.structureTime > latestRootTime)))
                 rootIndex := evidenceIndex
                 rootLayer := evidence.layer
@@ -1643,7 +1695,7 @@ f_build_nesting(array<Evidence> ledger) =>
                 for evidenceIndex = 0 to ledgerCount - 1
                     Evidence evidence = array.get(ledger, evidenceIndex)
                     bool divergenceEvidence = evidence.kind == 1 or evidence.kind == 2
-                    bool sameChain = evidence.market == 0 and evidence.layer == targetLayer and divergenceEvidence and evidence.direction == root.direction
+                    bool sameChain = evidence.reliable and evidence.market == 0 and evidence.layer == targetLayer and divergenceEvidence and evidence.direction == root.direction
                     bool timeContained = evidence.structureStartTime >= parentStartTime and evidence.structureEndTime <= parentEndTime
                     float childLow = evidence.structureRangeLow
                     float childHigh = evidence.structureRangeHigh
@@ -1669,7 +1721,7 @@ f_build_nesting(array<Evidence> ledger) =>
                 parentEndPrice := child.structurePrice
         bool partial = depth < root.layer + 1
         string eventId = f_event_prefix(timeframe.period) + "|nesting|" + str.tostring(root.direction) + "|T" + str.tostring(root.layer) + "|" + str.tostring(root.structureTime) + "|components=" + componentIds
-        result := NestingState.new(true, root.direction, chainConfirmed, partial, root.layer, depth, root.structureStartTime, parentEndTime, chainKnownTime, root.structurePrice, componentIds, componentText, eventId)
+        result := NestingState.new(true, root.direction, chainConfirmed, partial, root.layer, depth, root.structureStartTime, parentEndTime, chainKnownTime, na, root.structurePrice, componentIds, componentText, eventId)
     result
 
 f_previous_scenario_known(array<Scenario> previous, int layer, int kind, int direction, int sourceTime) =>
@@ -1746,48 +1798,31 @@ f_json_int(int value) =>
 f_json_float(float value) =>
     na(value) ? "null" : str.tostring(value, format.mintick)
 
-f_json_payload(string eventId, string marketTimeframe, int layer, string movementContext, int direction, string eventType, string status, int structureTime, float structurePrice, int confirmationTime, float confirmationPrice, int sourceCenter, string evidenceSummary, string messageZh) =>
+f_json_payload(string eventId, string marketTimeframe, int layer, string movementContext, int direction, string eventType, string status, int structureTime, float structurePrice, int confirmationTime, float confirmationPrice, int transitionTime, int sourceCenter, string evidenceSummary, string messageZh) =>
     string directionText = direction == 1 ? "buy" : direction == -1 ? "sell" : "neutral"
-    "{\"event_id\":\"" + f_json_escape(eventId) + "\",\"symbol\":\"" + f_json_escape(syminfo.tickerid) + "\",\"market_timeframe\":\"" + f_json_escape(marketTimeframe) + "\",\"theory_version\":\"" + THEORY_VERSION + "\",\"stroke_definition\":\"course_new\",\"trend_level\":\"T" + str.tostring(layer) + "\",\"movement_context\":\"" + f_json_escape(movementContext) + "\",\"direction\":\"" + directionText + "\",\"type\":\"" + eventType + "\",\"status\":\"" + status + "\",\"structure_time\":" + f_json_int(structureTime) + ",\"structure_price\":" + f_json_float(structurePrice) + ",\"confirmation_time\":" + f_json_int(confirmationTime) + ",\"confirmation_price\":" + f_json_float(confirmationPrice) + ",\"source_center\":" + f_json_int(sourceCenter) + ",\"evidence\":\"" + f_json_escape(evidenceSummary) + "\",\"message_zh\":\"" + f_json_escape(messageZh) + "\"}"
+    "{\"event_id\":\"" + f_json_escape(eventId) + "\",\"symbol\":\"" + f_json_escape(syminfo.tickerid) + "\",\"market_timeframe\":\"" + f_json_escape(marketTimeframe) + "\",\"theory_version\":\"" + THEORY_VERSION + "\",\"stroke_definition\":\"course_new\",\"trend_level\":\"T" + str.tostring(layer) + "\",\"movement_context\":\"" + f_json_escape(movementContext) + "\",\"direction\":\"" + directionText + "\",\"type\":\"" + eventType + "\",\"status\":\"" + status + "\",\"structure_time\":" + f_json_int(structureTime) + ",\"structure_price\":" + f_json_float(structurePrice) + ",\"confirmation_time\":" + f_json_int(confirmationTime) + ",\"confirmation_price\":" + f_json_float(confirmationPrice) + ",\"transition_time\":" + f_json_int(transitionTime) + ",\"source_center\":" + f_json_int(sourceCenter) + ",\"evidence\":\"" + f_json_escape(evidenceSummary) + "\",\"message_zh\":\"" + f_json_escape(messageZh) + "\"}"
 
-f_event_was_emitted(array<string> emittedIds, string eventId) =>
-    bool found = false
-    int emittedCount = array.size(emittedIds)
-    if emittedCount > 0
-        for emittedIndex = 0 to emittedCount - 1
-            if array.get(emittedIds, emittedIndex) == eventId
-                found := true
-                break
-    found
+f_remember_event(map<string, string> emittedStates, string eventId, string status) =>
+    map.put(emittedStates, eventId, status)
 
-f_remember_event(array<string> emittedIds, string eventKey) =>
-    if not f_event_was_emitted(emittedIds, eventKey)
-        array.push(emittedIds, eventKey)
-        if array.size(emittedIds) > 500
-            array.shift(emittedIds)
+f_emit_state(map<string, string> emittedStates, string eventId, string status, string payload) =>
+    string previousStatus = map.get(emittedStates, eventId)
+    if na(previousStatus) or previousStatus != status
+        alert(payload, alert.freq_all)
+        map.put(emittedStates, eventId, status)
 
-f_event_status_key(string eventId, bool confirmed) =>
-    eventId + "|status=" + (confirmed ? "confirmed" : "candidate")
+f_event_status(bool confirmed, int evidenceEndTime) =>
+    not na(evidenceEndTime) ? "invalidated" : confirmed ? "confirmed" : "candidate"
 
 f_evidence_status(Evidence evidence) =>
     not na(evidence.evidenceEndTime) ? "invalidated" : evidence.invalidationCandidate ? "invalidation_candidate" : evidence.confirmed ? "confirmed" : "candidate"
-
-f_evidence_status_key(Evidence evidence) =>
-    evidence.eventId + "|status=" + f_evidence_status(evidence)
-
-f_emit_once(array<string> emittedIds, string eventId, string payload) =>
-    if not f_event_was_emitted(emittedIds, eventId)
-        alert(payload, alert.freq_all)
-        array.push(emittedIds, eventId)
-        if array.size(emittedIds) > 500
-            array.shift(emittedIds)
 
 f_evidence_payload(Evidence evidence) =>
     string eventType = evidence.kind == 1 ? "consolidation_divergence" : evidence.kind == 2 ? "trend_divergence" : evidence.kind == 11 ? "point_1" : evidence.kind == 12 ? "point_2" : "point_3"
     string status = f_evidence_status(evidence)
     string evidenceSummary = f_evidence_short(evidence) + ";invalidation=" + str.tostring(evidence.invalidationPrice, format.mintick) + ";context=" + status + ";transition_time=" + f_json_int(evidence.knownTime)
     string messageZh = f_evidence_short(evidence) + (status == "invalidated" ? " 已失效" : status == "invalidation_candidate" ? " 已触及失效边界，等待结构确认" : status == "confirmed" ? " 已确认" : " 候选")
-    f_json_payload(evidence.eventId, evidence.marketTimeframe, evidence.layer, evidence.movementContext, evidence.direction, eventType, status, evidence.structureTime, evidence.structurePrice, evidence.confirmationTime, evidence.confirmationPrice, evidence.sourceIndex, evidenceSummary, messageZh)
+    f_json_payload(evidence.eventId, evidence.marketTimeframe, evidence.layer, evidence.movementContext, evidence.direction, eventType, status, evidence.structureTime, evidence.structurePrice, evidence.confirmationTime, evidence.confirmationPrice, evidence.knownTime, evidence.sourceIndex, evidenceSummary, messageZh)
 
 f_process_reference_bar(bool enabled, int sourceTime, float sourceHigh, float sourceLow, float sourceDif, float sourceHist, int knownTime, ReferenceState state, array<KBar> bars, array<Fractal> endpoints, array<Unit> strokes, array<float> pendingHighs, array<float> pendingLows, array<int> pendingIndices, array<int> pendingTimes, array<float> posAreaCums, array<float> negAreaCums, array<float> difValues, bool allowConfirmation) =>
     bool newConfirmedBar = enabled and not na(sourceTime) and (na(state.lastSourceTime) or sourceTime != state.lastSourceTime)
@@ -1858,6 +1893,8 @@ f_build_reference_engine(ReferenceEngine engine) =>
     engine.trendT0 := f_get_trend_state(engine.centersT0, engine.divergencesT0, engine.movementsT0, 0)
     engine.trendT1 := f_get_trend_state(engine.centersT1, engine.divergencesT1, engine.movementsT1, 1)
     engine.trendT2 := f_get_trend_state(engine.centersT2, engine.divergencesT2, engine.movementsT2, 2)
+    if na(engine.state.reliableStartTime) and engine.state.nextIndex >= MACD_WARMUP_BARS
+        engine.state.reliableStartTime := f_reliable_confirmed_center_time(engine.segmentsS, MACD_WARMUP_BARS)
     engine.state.structuresDirty := false
     engine
 
@@ -2015,9 +2052,11 @@ var array<Evidence> activeEvidence = array.new<Evidence>()
 var array<Evidence> transitionEvidence = array.new<Evidence>()
 var array<Evidence> nestingEvidence = array.new<Evidence>()
 var array<Resonance> activeResonances = array.new<Resonance>()
+var array<Resonance> resonanceTransitions = array.new<Resonance>()
 var NestingState nestingState = na
+var NestingState nestingTransition = na
 var array<Scenario> activeScenarios = array.new<Scenario>()
-varip array<string> emittedEventIds = array.new<string>()
+varip map<string, string> emittedEventStates = map.new<string, string>()
 varip bool alertBaselineReady = false
 var TrendState trendT0 = na
 var TrendState trendT1 = na
@@ -2076,7 +2115,7 @@ if confirmedRawBar and (na(lastProcessedRawIndex) or bar_index != lastProcessedR
         appendedSynthetic := f_ingest_kbar(syntheticBars, normalizedHigh, normalizedLow, bar_index, time, seedDirection)
 
     if appendedSynthetic
-        Fractal confirmedFractal = f_detect_confirmed_fractal(syntheticBars, time)
+        Fractal confirmedFractal = f_detect_confirmed_fractal(syntheticBars, time_close)
         if not na(confirmedFractal)
             array.push(baseFractals, confirmedFractal)
             f_update_strokes(strokeEndpoints, strokes, confirmedFractal, posAreaCums, negAreaCums, difValues, true)
@@ -2110,7 +2149,6 @@ if barstate.islast
                 int previewPendingCount = array.size(pendingHighs)
                 for i = 0 to previewPendingCount - 1
                     bool replayAppended = f_ingest_kbar(viewSyntheticBars, array.get(pendingHighs, i), array.get(pendingLows, i), array.get(pendingIndices, i), array.get(pendingTimes, i), previewSeedDirection)
-                    previewAppendedSynthetic := previewAppendedSynthetic or replayAppended
                 bool currentAppended = f_ingest_kbar(viewSyntheticBars, normalizedHigh, normalizedLow, bar_index, time, previewSeedDirection)
                 previewAppendedSynthetic := previewAppendedSynthetic or currentAppended
         if previewAppendedSynthetic
@@ -2128,33 +2166,37 @@ if barstate.islast
         reliableStartTime := f_reliable_confirmed_center_time(segmentsS, MACD_WARMUP_BARS)
     array.clear(activeEvidence)
     array.clear(transitionEvidence)
-    f_collect_layer_evidence(activeEvidence, transitionEvidence, 0, timeframe.period, segmentsS, divergencesT0, pointsT0)
-    f_collect_layer_evidence(activeEvidence, transitionEvidence, 0, timeframe.period, movementsT0, divergencesT1, pointsT1)
-    f_collect_layer_evidence(activeEvidence, transitionEvidence, 0, timeframe.period, movementsT1, divergencesT2, pointsT2)
-    f_collect_layer_evidence(activeEvidence, transitionEvidence, 0, timeframe.period, movementsT2, divergencesT3, pointsT3)
+    f_collect_layer_evidence(activeEvidence, transitionEvidence, 0, timeframe.period, reliableStartTime, segmentsS, divergencesT0, pointsT0)
+    f_collect_layer_evidence(activeEvidence, transitionEvidence, 0, timeframe.period, reliableStartTime, movementsT0, divergencesT1, pointsT1)
+    f_collect_layer_evidence(activeEvidence, transitionEvidence, 0, timeframe.period, reliableStartTime, movementsT1, divergencesT2, pointsT2)
+    f_collect_layer_evidence(activeEvidence, transitionEvidence, 0, timeframe.period, reliableStartTime, movementsT2, divergencesT3, pointsT3)
     if referenceEnabled1
-        f_collect_layer_evidence(activeEvidence, transitionEvidence, 1, referenceTimeframe1, referenceEngine1.segmentsS, referenceEngine1.divergencesT0, referenceEngine1.pointsT0)
-        f_collect_layer_evidence(activeEvidence, transitionEvidence, 1, referenceTimeframe1, referenceEngine1.movementsT0, referenceEngine1.divergencesT1, referenceEngine1.pointsT1)
-        f_collect_layer_evidence(activeEvidence, transitionEvidence, 1, referenceTimeframe1, referenceEngine1.movementsT1, referenceEngine1.divergencesT2, referenceEngine1.pointsT2)
+        f_collect_layer_evidence(activeEvidence, transitionEvidence, 1, referenceTimeframe1, referenceEngine1.state.reliableStartTime, referenceEngine1.segmentsS, referenceEngine1.divergencesT0, referenceEngine1.pointsT0)
+        f_collect_layer_evidence(activeEvidence, transitionEvidence, 1, referenceTimeframe1, referenceEngine1.state.reliableStartTime, referenceEngine1.movementsT0, referenceEngine1.divergencesT1, referenceEngine1.pointsT1)
+        f_collect_layer_evidence(activeEvidence, transitionEvidence, 1, referenceTimeframe1, referenceEngine1.state.reliableStartTime, referenceEngine1.movementsT1, referenceEngine1.divergencesT2, referenceEngine1.pointsT2)
     if referenceEnabled2
-        f_collect_layer_evidence(activeEvidence, transitionEvidence, 2, referenceTimeframe2, referenceEngine2.segmentsS, referenceEngine2.divergencesT0, referenceEngine2.pointsT0)
-        f_collect_layer_evidence(activeEvidence, transitionEvidence, 2, referenceTimeframe2, referenceEngine2.movementsT0, referenceEngine2.divergencesT1, referenceEngine2.pointsT1)
-        f_collect_layer_evidence(activeEvidence, transitionEvidence, 2, referenceTimeframe2, referenceEngine2.movementsT1, referenceEngine2.divergencesT2, referenceEngine2.pointsT2)
+        f_collect_layer_evidence(activeEvidence, transitionEvidence, 2, referenceTimeframe2, referenceEngine2.state.reliableStartTime, referenceEngine2.segmentsS, referenceEngine2.divergencesT0, referenceEngine2.pointsT0)
+        f_collect_layer_evidence(activeEvidence, transitionEvidence, 2, referenceTimeframe2, referenceEngine2.state.reliableStartTime, referenceEngine2.movementsT0, referenceEngine2.divergencesT1, referenceEngine2.pointsT1)
+        f_collect_layer_evidence(activeEvidence, transitionEvidence, 2, referenceTimeframe2, referenceEngine2.state.reliableStartTime, referenceEngine2.movementsT1, referenceEngine2.divergencesT2, referenceEngine2.pointsT2)
     if referenceEnabled3
-        f_collect_layer_evidence(activeEvidence, transitionEvidence, 3, referenceTimeframe3, referenceEngine3.segmentsS, referenceEngine3.divergencesT0, referenceEngine3.pointsT0)
-        f_collect_layer_evidence(activeEvidence, transitionEvidence, 3, referenceTimeframe3, referenceEngine3.movementsT0, referenceEngine3.divergencesT1, referenceEngine3.pointsT1)
-        f_collect_layer_evidence(activeEvidence, transitionEvidence, 3, referenceTimeframe3, referenceEngine3.movementsT1, referenceEngine3.divergencesT2, referenceEngine3.pointsT2)
+        f_collect_layer_evidence(activeEvidence, transitionEvidence, 3, referenceTimeframe3, referenceEngine3.state.reliableStartTime, referenceEngine3.segmentsS, referenceEngine3.divergencesT0, referenceEngine3.pointsT0)
+        f_collect_layer_evidence(activeEvidence, transitionEvidence, 3, referenceTimeframe3, referenceEngine3.state.reliableStartTime, referenceEngine3.movementsT0, referenceEngine3.divergencesT1, referenceEngine3.pointsT1)
+        f_collect_layer_evidence(activeEvidence, transitionEvidence, 3, referenceTimeframe3, referenceEngine3.state.reliableStartTime, referenceEngine3.movementsT1, referenceEngine3.divergencesT2, referenceEngine3.pointsT2)
     if referenceEnabled4
-        f_collect_layer_evidence(activeEvidence, transitionEvidence, 4, referenceTimeframe4, referenceEngine4.segmentsS, referenceEngine4.divergencesT0, referenceEngine4.pointsT0)
-        f_collect_layer_evidence(activeEvidence, transitionEvidence, 4, referenceTimeframe4, referenceEngine4.movementsT0, referenceEngine4.divergencesT1, referenceEngine4.pointsT1)
-        f_collect_layer_evidence(activeEvidence, transitionEvidence, 4, referenceTimeframe4, referenceEngine4.movementsT1, referenceEngine4.divergencesT2, referenceEngine4.pointsT2)
+        f_collect_layer_evidence(activeEvidence, transitionEvidence, 4, referenceTimeframe4, referenceEngine4.state.reliableStartTime, referenceEngine4.segmentsS, referenceEngine4.divergencesT0, referenceEngine4.pointsT0)
+        f_collect_layer_evidence(activeEvidence, transitionEvidence, 4, referenceTimeframe4, referenceEngine4.state.reliableStartTime, referenceEngine4.movementsT0, referenceEngine4.divergencesT1, referenceEngine4.pointsT1)
+        f_collect_layer_evidence(activeEvidence, transitionEvidence, 4, referenceTimeframe4, referenceEngine4.state.reliableStartTime, referenceEngine4.movementsT1, referenceEngine4.divergencesT2, referenceEngine4.pointsT2)
+    array<Resonance> previousResonances = array.copy(activeResonances)
     f_build_resonances(activeEvidence, activeResonances)
+    f_build_resonance_transitions(previousResonances, activeResonances, transitionEvidence, resonanceTransitions)
     array.clear(nestingEvidence)
     f_collect_nesting_evidence(nestingEvidence, timeframe.period, segmentsS, divergencesT0)
     f_collect_nesting_evidence(nestingEvidence, timeframe.period, movementsT0, divergencesT1)
     f_collect_nesting_evidence(nestingEvidence, timeframe.period, movementsT1, divergencesT2)
     f_collect_nesting_evidence(nestingEvidence, timeframe.period, movementsT2, divergencesT3)
+    NestingState previousNesting = nestingState
     nestingState := f_build_nesting(nestingEvidence)
+    nestingTransition := f_build_nesting_transition(previousNesting, nestingState, transitionEvidence)
     if array.size(centersT3) > 0
         f_build_scenarios(movementsT2, centersT3, trendT3, 3, activeScenarios)
     else if array.size(centersT2) > 0
@@ -2168,77 +2210,93 @@ if barstate.islast and barstate.isrealtime and standardChart
     int evidenceCountForAlerts = array.size(activeEvidence)
     int transitionCountForAlerts = array.size(transitionEvidence)
     int resonanceCountForAlerts = array.size(activeResonances)
+    int resonanceTransitionCountForAlerts = array.size(resonanceTransitions)
     int scenarioCountForAlerts = array.size(activeScenarios)
     if not alertBaselineReady
         if evidenceCountForAlerts > 0
             for evidenceIndex = 0 to evidenceCountForAlerts - 1
                 Evidence evidence = array.get(activeEvidence, evidenceIndex)
-                f_remember_event(emittedEventIds, f_evidence_status_key(evidence))
+                if evidence.reliable and evidence.knownTime < time
+                    f_remember_event(emittedEventStates, evidence.eventId, f_evidence_status(evidence))
         if transitionCountForAlerts > 0
             for transitionIndex = 0 to transitionCountForAlerts - 1
                 Evidence transition = array.get(transitionEvidence, transitionIndex)
-                f_remember_event(emittedEventIds, f_evidence_status_key(transition))
+                if transition.reliable and transition.knownTime < time
+                    f_remember_event(emittedEventStates, transition.eventId, f_evidence_status(transition))
         if resonanceCountForAlerts > 0
             for resonanceIndex = 0 to resonanceCountForAlerts - 1
                 Resonance resonance = array.get(activeResonances, resonanceIndex)
-                f_remember_event(emittedEventIds, f_event_status_key(resonance.eventId, resonance.confirmed))
-        if not na(nestingState) and nestingState.active
-            f_remember_event(emittedEventIds, f_event_status_key(nestingState.eventId, nestingState.confirmed))
+                if resonance.knownTime < time
+                    f_remember_event(emittedEventStates, resonance.eventId, f_event_status(resonance.confirmed, resonance.evidenceEndTime))
+        if not na(nestingState) and nestingState.active and nestingState.knownTime < time
+            f_remember_event(emittedEventStates, nestingState.eventId, f_event_status(nestingState.confirmed, nestingState.evidenceEndTime))
         if scenarioCountForAlerts > 0
             for scenarioIndex = 0 to scenarioCountForAlerts - 1
                 Scenario scenario = array.get(activeScenarios, scenarioIndex)
-                f_remember_event(emittedEventIds, f_event_status_key(scenario.eventId, false))
+                if scenario.knownTime < time
+                    f_remember_event(emittedEventStates, scenario.eventId, "candidate")
         alertBaselineReady := true
-    else
-        if evidenceCountForAlerts > 0
-            for evidenceIndex = 0 to evidenceCountForAlerts - 1
-                Evidence evidence = array.get(activeEvidence, evidenceIndex)
-                bool categoryEnabled = evidence.kind <= 2 ? alertDivergence : alertBuySell
-                bool statusEnabled = evidence.confirmed or alertCandidates
-                bool newlyKnown = not na(evidence.knownTime) and evidence.knownTime >= time
-                if categoryEnabled and statusEnabled and (newlyKnown or evidence.invalidationCandidate)
-                    f_emit_once(emittedEventIds, f_evidence_status_key(evidence), f_evidence_payload(evidence))
-        if transitionCountForAlerts > 0
-            for transitionIndex = 0 to transitionCountForAlerts - 1
-                Evidence transition = array.get(transitionEvidence, transitionIndex)
-                bool categoryEnabled = transition.kind <= 2 ? alertDivergence : alertBuySell
-                bool newlyKnown = not na(transition.knownTime) and transition.knownTime >= time
-                if categoryEnabled and newlyKnown
-                    f_emit_once(emittedEventIds, f_evidence_status_key(transition), f_evidence_payload(transition))
 
-        if alertResonance and resonanceCountForAlerts > 0
-            for resonanceIndex = 0 to resonanceCountForAlerts - 1
-                Resonance resonance = array.get(activeResonances, resonanceIndex)
-                bool statusEnabled = resonance.confirmed or alertCandidates
-                bool newlyKnown = not na(resonance.knownTime) and resonance.knownTime >= time
-                if statusEnabled and newlyKnown
-                    string resonanceTimeframe = resonance.scope == 2 ? "multi" : resonance.market == 0 ? timeframe.period : resonance.market == 1 ? referenceTimeframe1 : resonance.market == 2 ? referenceTimeframe2 : resonance.market == 3 ? referenceTimeframe3 : referenceTimeframe4
-                    string resonanceType = resonance.scope == 1 ? "layer_resonance" : "timeframe_resonance"
-                    string resonanceStatus = resonance.confirmed ? "confirmed" : "candidate"
-                    string resonanceEvidence = resonance.componentText + ";conflicts=" + str.tostring(resonance.conflictCount)
-                    string resonanceMessage = (resonance.scope == 1 ? "层间" : "跨周期") + (resonance.direction == 1 ? "买向" : "卖向") + "共振，组成证据 " + str.tostring(resonance.evidenceCount) + " 项，冲突 " + str.tostring(resonance.conflictCount) + " 项"
-                    string payload = f_json_payload(resonance.eventId, resonanceTimeframe, -1, "composite_movement_contexts", resonance.direction, resonanceType, resonanceStatus, resonance.startTime, na, resonance.confirmed ? resonance.knownTime : na, na, na, resonanceEvidence, resonanceMessage)
-                    f_emit_once(emittedEventIds, f_event_status_key(resonance.eventId, resonance.confirmed), payload)
+    if evidenceCountForAlerts > 0
+        for evidenceIndex = 0 to evidenceCountForAlerts - 1
+            Evidence evidence = array.get(activeEvidence, evidenceIndex)
+            bool categoryEnabled = evidence.kind <= 2 ? alertDivergence : alertBuySell
+            bool statusEnabled = evidence.confirmed or alertCandidates
+            if evidence.reliable and categoryEnabled and statusEnabled
+                string status = f_evidence_status(evidence)
+                f_emit_state(emittedEventStates, evidence.eventId, status, f_evidence_payload(evidence))
+    if transitionCountForAlerts > 0
+        for transitionIndex = 0 to transitionCountForAlerts - 1
+            Evidence transition = array.get(transitionEvidence, transitionIndex)
+            bool categoryEnabled = transition.kind <= 2 ? alertDivergence : alertBuySell
+            if transition.reliable and categoryEnabled
+                string status = f_evidence_status(transition)
+                f_emit_state(emittedEventStates, transition.eventId, status, f_evidence_payload(transition))
 
-        if alertNesting and not na(nestingState) and nestingState.active
-            bool statusEnabled = nestingState.confirmed or alertCandidates
-            bool newlyKnown = not na(nestingState.knownTime) and nestingState.knownTime >= time
-            if statusEnabled and newlyKnown
-                string nestingStatus = nestingState.confirmed ? "confirmed" : "candidate"
-                string nestingEvidence = nestingState.componentText + ";partial=" + str.tostring(nestingState.partial) + ";depth=" + str.tostring(nestingState.depth)
-                string nestingMessage = (nestingState.partial ? "部分" : "完整") + (nestingState.direction == 1 ? "买向" : "卖向") + "区间套，深度 " + str.tostring(nestingState.depth)
-                string payload = f_json_payload(nestingState.eventId, timeframe.period, nestingState.rootLayer, "nested_movement_contexts", nestingState.direction, "nesting", nestingStatus, nestingState.endTime, nestingState.price, nestingState.confirmed ? nestingState.knownTime : na, na, na, nestingEvidence, nestingMessage)
-                f_emit_once(emittedEventIds, f_event_status_key(nestingState.eventId, nestingState.confirmed), payload)
+    if alertResonance and resonanceCountForAlerts > 0
+        for resonanceIndex = 0 to resonanceCountForAlerts - 1
+            Resonance resonance = array.get(activeResonances, resonanceIndex)
+            bool statusEnabled = resonance.confirmed or alertCandidates
+            if statusEnabled
+                string resonanceTimeframe = resonance.scope == 2 ? "multi" : resonance.market == 0 ? timeframe.period : resonance.market == 1 ? referenceTimeframe1 : resonance.market == 2 ? referenceTimeframe2 : resonance.market == 3 ? referenceTimeframe3 : referenceTimeframe4
+                string resonanceType = resonance.scope == 1 ? "layer_resonance" : "timeframe_resonance"
+                string resonanceStatus = f_event_status(resonance.confirmed, resonance.evidenceEndTime)
+                string resonanceEvidence = resonance.componentText + ";conflicts=" + str.tostring(resonance.conflictCount)
+                string resonanceMessage = (resonance.scope == 1 ? "层间" : "跨周期") + (resonance.direction == 1 ? "买向" : "卖向") + "共振，组成证据 " + str.tostring(resonance.evidenceCount) + " 项，冲突 " + str.tostring(resonance.conflictCount) + " 项"
+                string payload = f_json_payload(resonance.eventId, resonanceTimeframe, -1, "composite_movement_contexts", resonance.direction, resonanceType, resonanceStatus, resonance.startTime, na, resonance.confirmed ? resonance.knownTime : na, na, resonance.knownTime, na, resonanceEvidence, resonanceMessage)
+                f_emit_state(emittedEventStates, resonance.eventId, resonanceStatus, payload)
+    if alertResonance and resonanceTransitionCountForAlerts > 0
+        for transitionIndex = 0 to resonanceTransitionCountForAlerts - 1
+            Resonance resonance = array.get(resonanceTransitions, transitionIndex)
+            string resonanceTimeframe = resonance.scope == 2 ? "multi" : resonance.market == 0 ? timeframe.period : resonance.market == 1 ? referenceTimeframe1 : resonance.market == 2 ? referenceTimeframe2 : resonance.market == 3 ? referenceTimeframe3 : referenceTimeframe4
+            string resonanceType = resonance.scope == 1 ? "layer_resonance" : "timeframe_resonance"
+            string resonanceEvidence = resonance.componentText + ";conflicts=" + str.tostring(resonance.conflictCount)
+            string resonanceMessage = (resonance.scope == 1 ? "层间" : "跨周期") + "共振已失效"
+            string payload = f_json_payload(resonance.eventId, resonanceTimeframe, -1, "composite_movement_contexts", resonance.direction, resonanceType, "invalidated", resonance.startTime, na, resonance.knownTime, na, resonance.evidenceEndTime, na, resonanceEvidence, resonanceMessage)
+            f_emit_state(emittedEventStates, resonance.eventId, "invalidated", payload)
 
-        if alertScenario and alertCandidates and scenarioCountForAlerts > 0
-            for scenarioIndex = 0 to scenarioCountForAlerts - 1
-                Scenario scenario = array.get(activeScenarios, scenarioIndex)
-                if scenario.knownTime >= time
-                    string scenarioEvidence = "trigger=" + scenario.triggerText + ";invalidation=" + scenario.invalidationText + ";layout_only=true"
-                    string scenarioMessage = "走势终完美候选分支：" + scenario.name + "。不表示目标价、时间或概率"
-                    string movementContext = f_movement_context_id(timeframe.period, scenario.layer, scenario.sourceTime)
-                    string payload = f_json_payload(scenario.eventId, timeframe.period, scenario.layer, movementContext, scenario.direction, "scenario", "candidate", scenario.sourceTime, scenario.anchorPrice, na, na, na, scenarioEvidence, scenarioMessage)
-                    f_emit_once(emittedEventIds, f_event_status_key(scenario.eventId, false), payload)
+    if alertNesting and not na(nestingState) and nestingState.active
+        bool statusEnabled = nestingState.confirmed or alertCandidates
+        if statusEnabled
+            string nestingStatus = f_event_status(nestingState.confirmed, nestingState.evidenceEndTime)
+            string nestingEvidenceText = nestingState.componentText + ";partial=" + str.tostring(nestingState.partial) + ";depth=" + str.tostring(nestingState.depth)
+            string nestingMessage = (nestingState.partial ? "部分" : "完整") + (nestingState.direction == 1 ? "买向" : "卖向") + "区间套，深度 " + str.tostring(nestingState.depth)
+            string payload = f_json_payload(nestingState.eventId, timeframe.period, nestingState.rootLayer, "nested_movement_contexts", nestingState.direction, "nesting", nestingStatus, nestingState.endTime, nestingState.price, nestingState.confirmed ? nestingState.knownTime : na, na, nestingState.knownTime, na, nestingEvidenceText, nestingMessage)
+            f_emit_state(emittedEventStates, nestingState.eventId, nestingStatus, payload)
+    if alertNesting and not na(nestingTransition)
+        string nestingEvidenceText = nestingTransition.componentText + ";partial=" + str.tostring(nestingTransition.partial) + ";depth=" + str.tostring(nestingTransition.depth)
+        string nestingMessage = "区间套已失效"
+        string payload = f_json_payload(nestingTransition.eventId, timeframe.period, nestingTransition.rootLayer, "nested_movement_contexts", nestingTransition.direction, "nesting", "invalidated", nestingTransition.endTime, nestingTransition.price, nestingTransition.knownTime, na, nestingTransition.evidenceEndTime, na, nestingEvidenceText, nestingMessage)
+        f_emit_state(emittedEventStates, nestingTransition.eventId, "invalidated", payload)
+
+    if alertScenario and alertCandidates and scenarioCountForAlerts > 0
+        for scenarioIndex = 0 to scenarioCountForAlerts - 1
+            Scenario scenario = array.get(activeScenarios, scenarioIndex)
+            string scenarioEvidence = "trigger=" + scenario.triggerText + ";invalidation=" + scenario.invalidationText + ";layout_only=true"
+            string scenarioMessage = "走势终完美候选分支：" + scenario.name + "。不表示目标价、时间或概率"
+            string movementContext = f_movement_context_id(timeframe.period, scenario.layer, scenario.sourceTime)
+            string payload = f_json_payload(scenario.eventId, timeframe.period, scenario.layer, movementContext, scenario.direction, "scenario", "candidate", scenario.sourceTime, scenario.anchorPrice, na, na, scenario.knownTime, na, scenarioEvidence, scenarioMessage)
+            f_emit_state(emittedEventStates, scenario.eventId, "candidate", payload)
 
 // -----------------------------------------------------------------------------
 // Presentation foundation
@@ -2288,7 +2346,7 @@ f_divergence_summary(array<Divergence> divergences) =>
         Divergence latest = array.get(divergences, count - 1)
         string kind = latest.kind == 2 ? "趋势背驰" : "盘整背驰"
         string direction = latest.direction == 1 ? "顶" : "底"
-        string status = latest.confirmed ? "确认" : "候选"
+        string status = not latest.valid ? "已失效" : latest.invalidationCandidate ? "失效候选" : latest.confirmed ? "确认" : "候选"
         result := str.tostring(count) + "·" + kind + direction + "·" + status + "·" + str.tostring(latest.areaRatio, "#.###")
     result
 
@@ -2419,19 +2477,18 @@ f_scenario_tooltip(array<Scenario> scenarios) =>
     result
 
 
-f_build_execution_state(array<Evidence> ledger, bool reliable) =>
+f_build_execution_state(array<Evidence> ledger) =>
     ExecutionState result = ExecutionState.new(EXECUTION_DATA_INSUFFICIENT, 0, na, na, 0, na, na, na)
-    if reliable
-        result.status := EXECUTION_OBSERVE
-        int latestContextIndex = na
-        int latestContextPriority = -1
-        int latestContextKnownTime = na
-        int latestActionableIndex = na
-        int latestActionableKnownTime = na
-        int evidenceCount = array.size(ledger)
-        if evidenceCount > 0
-            for evidenceIndex = 0 to evidenceCount - 1
-                Evidence evidence = array.get(ledger, evidenceIndex)
+    int latestContextIndex = na
+    int latestContextPriority = -1
+    int latestContextKnownTime = na
+    int latestActionableIndex = na
+    int latestActionableKnownTime = na
+    int evidenceCount = array.size(ledger)
+    if evidenceCount > 0
+        for evidenceIndex = 0 to evidenceCount - 1
+            Evidence evidence = array.get(ledger, evidenceIndex)
+            if evidence.reliable
                 int contextPriority = evidence.confirmed ? 1 : 0
                 contextPriority += evidence.kind >= 11 ? 2 : 0
                 bool latestContext = na(latestContextIndex) or evidence.knownTime > latestContextKnownTime or (evidence.knownTime == latestContextKnownTime and contextPriority > latestContextPriority)
@@ -2443,21 +2500,21 @@ f_build_execution_state(array<Evidence> ledger, bool reliable) =>
                 if actionable and (na(latestActionableIndex) or evidence.knownTime > latestActionableKnownTime)
                     latestActionableIndex := evidenceIndex
                     latestActionableKnownTime := evidence.knownTime
-        int primaryIndex = na
-        primaryIndex := na(latestActionableIndex) ? latestContextIndex : latestActionableIndex
-        if not na(primaryIndex)
-            Evidence primary = array.get(ledger, primaryIndex)
-            float riskDistance = not na(primary.confirmationPrice) and not na(primary.invalidationPrice) ? math.abs(primary.confirmationPrice - primary.invalidationPrice) : na
-            result := ExecutionState.new(EXECUTION_WAIT_CONFIRMATION, primary.direction, primaryIndex, latestContextIndex, 0, primary.confirmationPrice, primary.invalidationPrice, riskDistance)
-            bool executablePoint = primary.confirmed and primary.kind >= 11 and not primary.invalidationCandidate
-            if executablePoint
-                int conflicts = 0
-                for evidenceIndex = 0 to evidenceCount - 1
-                    Evidence candidate = array.get(ledger, evidenceIndex)
-                    bool sameContext = candidate.marketTimeframe == primary.marketTimeframe and candidate.layer == primary.layer
-                    if sameContext and candidate.confirmed and candidate.direction == -primary.direction
-                        conflicts += 1
-                result := ExecutionState.new(conflicts > 0 ? EXECUTION_CONFLICT : EXECUTION_READY, primary.direction, primaryIndex, latestContextIndex, conflicts, primary.confirmationPrice, primary.invalidationPrice, riskDistance)
+    if not na(latestContextIndex)
+        result.status := EXECUTION_OBSERVE
+        int primaryIndex = na(latestActionableIndex) ? latestContextIndex : latestActionableIndex
+        Evidence primary = array.get(ledger, primaryIndex)
+        float riskDistance = not na(primary.confirmationPrice) and not na(primary.invalidationPrice) ? math.abs(primary.confirmationPrice - primary.invalidationPrice) : na
+        result := ExecutionState.new(EXECUTION_WAIT_CONFIRMATION, primary.direction, primaryIndex, latestContextIndex, 0, primary.confirmationPrice, primary.invalidationPrice, riskDistance)
+        bool executablePoint = primary.confirmed and primary.kind >= 11 and not primary.invalidationCandidate
+        if executablePoint
+            int conflicts = 0
+            for evidenceIndex = 0 to evidenceCount - 1
+                Evidence candidate = array.get(ledger, evidenceIndex)
+                bool sameContext = candidate.marketTimeframe == primary.marketTimeframe and candidate.layer == primary.layer
+                if candidate.reliable and sameContext and candidate.confirmed and candidate.direction == -primary.direction
+                    conflicts += 1
+            result := ExecutionState.new(conflicts > 0 ? EXECUTION_CONFLICT : EXECUTION_READY, primary.direction, primaryIndex, latestContextIndex, conflicts, primary.confirmationPrice, primary.invalidationPrice, riskDistance)
     result
 
 f_execution_status_summary(ExecutionState state) =>
@@ -2835,8 +2892,7 @@ if barstate.islast
     f_panel_cell(statusPanel, 0, 41, "计算/资源")
     string resourceStatus = pointHistoryClipped ? "历史点预算裁剪" : nearObjectLimit ? "几何已主动裁剪" : "预算正常"
     f_panel_cell(statusPanel, 1, 41, "焦T0-3·参T0-2·" + resourceStatus)
-    bool executionReliable = standardChart and warmedUp and not na(reliableStartTime)
-    ExecutionState executionState = f_build_execution_state(activeEvidence, executionReliable)
+    ExecutionState executionState = standardChart ? f_build_execution_state(activeEvidence) : ExecutionState.new(EXECUTION_DATA_INSUFFICIENT, 0, na, na, 0, na, na, na)
     bool crossTimeframeOpposition = false
     int resonanceCount = array.size(activeResonances)
     if executionState.direction != 0 and resonanceCount > 0

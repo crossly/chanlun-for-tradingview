@@ -205,9 +205,10 @@ class CourseV2ContractTest(unittest.TestCase):
     def test_evidence_alert_identity_covers_invalidation_lifecycle(self) -> None:
         self.assertIn('evidence.invalidationCandidate ? "invalidation_candidate"', SOURCE)
         self.assertIn('not na(evidence.evidenceEndTime) ? "invalidated"', SOURCE)
-        self.assertIn("f_evidence_status_key", SOURCE)
+        self.assertIn("f_emit_state", SOURCE)
         self.assertIn("transitionEvidence", SOURCE)
-        self.assertNotIn("f_event_status_key(evidence.eventId, evidence.confirmed)", SOURCE)
+        self.assertIn('varip map<string, string> emittedEventStates', SOURCE)
+        self.assertNotIn("emittedEventIds", SOURCE)
 
     def test_execution_policy_derives_state_without_presentation_inputs(self) -> None:
         for constant in (
@@ -226,17 +227,17 @@ class CourseV2ContractTest(unittest.TestCase):
         )
         self.assertIsNotNone(builder)
         body = builder.group("body")
-        self.assertIn("if reliable", body)
+        self.assertIn("if evidence.reliable", body)
         self.assertNotIn("resourceClipped", body)
-        self.assertIn("primary.confirmed and primary.kind >= 11 and not primary.invalidationCandidate", body)
+        self.assertIn("evidence.confirmed and evidence.kind >= 11 and not evidence.invalidationCandidate", body)
         self.assertIn("candidate.marketTimeframe == primary.marketTimeframe and candidate.layer == primary.layer", body)
-        self.assertIn("candidate.confirmed and candidate.direction == -primary.direction", body)
+        self.assertIn("candidate.reliable and sameContext and candidate.confirmed", body)
         self.assertIn("math.abs(primary.confirmationPrice - primary.invalidationPrice)", body)
         self.assertNotIn("f_build_points(", body)
         self.assertNotIn("f_build_divergences(", body)
 
-        self.assertIn("ExecutionState executionState = f_build_execution_state(activeEvidence, executionReliable)", SOURCE)
-        self.assertNotIn("f_build_execution_state(activeEvidence, executionReliable, resourceClipped)", SOURCE)
+        self.assertIn("ExecutionState executionState = standardChart ? f_build_execution_state(activeEvidence)", SOURCE)
+        self.assertNotIn("f_build_execution_state(activeEvidence, executionReliable", SOURCE)
         self.assertIn("绘图裁剪不改变结构状态", SOURCE)
 
     def test_operation_level_view_preserves_market_and_layer_context(self) -> None:
@@ -520,7 +521,7 @@ class CourseV2ContractTest(unittest.TestCase):
         )
         self.assertIsNotNone(builder)
         body = builder.group("body")
-        self.assertIn("bool includeStatus = requiredConfirmed ? evidence.confirmed : true", body)
+        self.assertIn("bool includeStatus = evidence.reliable and (requiredConfirmed ? evidence.confirmed : true)", body)
         self.assertIn("bool hasCandidate = false", body)
         self.assertIn("hasCandidate := hasCandidate or not evidence.confirmed", body)
         self.assertIn("identityCount >= 2 and (requiredConfirmed or hasCandidate)", body)
@@ -552,8 +553,18 @@ class CourseV2ContractTest(unittest.TestCase):
         self.assertIn("int latestContextIndex = na", body)
         self.assertIn("int latestActionableIndex = na", body)
         self.assertIn("bool actionable = evidence.confirmed and evidence.kind >= 11 and not evidence.invalidationCandidate", body)
-        self.assertIn("primaryIndex := na(latestActionableIndex) ? latestContextIndex : latestActionableIndex", body)
+        self.assertIn("int primaryIndex = na(latestActionableIndex) ? latestContextIndex : latestActionableIndex", body)
         self.assertRegex(SOURCE, r"\bcontextEvidenceIndex\b")
+
+    def test_confirmation_reliability_and_lifecycle_are_source_scoped(self) -> None:
+        self.assertIn("f_detect_confirmed_fractal(syntheticBars, time_close)", SOURCE)
+        self.assertIn("int reliableStartTime", SOURCE)
+        self.assertIn("referenceEngine1.state.reliableStartTime", SOURCE)
+        self.assertIn("bool reliable", SOURCE)
+        self.assertIn("resonanceTransitions", SOURCE)
+        self.assertIn("nestingTransition", SOURCE)
+        self.assertIn('\\"transition_time\\"', SOURCE)
+        self.assertNotIn("array.shift(emitted", SOURCE)
 
     def test_failed_departure_scenario_describes_return_to_core(self) -> None:
         self.assertIn('"离开后重新进入中枢核心区"', SOURCE)
